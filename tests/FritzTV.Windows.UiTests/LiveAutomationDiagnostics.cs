@@ -15,10 +15,12 @@ internal static class LiveAutomationDiagnostics
     public static string Capture(NativeDesktopSession session)
     {
         var located = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var walked = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (string id in new[] { "Timeline", "Status", "Play", "Quit", "ReceptionDiagnostics" })
         {
             located[id] = Read(() => session.Window.FindFirstDescendant(condition => condition.ByAutomationId(id)) is { } element
                 ? Describe(element, depth: 0) : null);
+            walked[id] = Read(() => session.TryFind(id) is { } element ? Describe(element, depth: 0) : null);
         }
 
         return JsonSerializer.Serialize(new
@@ -27,6 +29,7 @@ internal static class LiveAutomationDiagnostics
             Utc = DateTimeOffset.UtcNow,
             Root = Describe(session.Window, depth: 0),
             FindById = located,
+            ControlViewById = walked,
             ControlView = Read(() => Walk(session.Window)),
         });
     }

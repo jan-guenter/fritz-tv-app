@@ -13,7 +13,7 @@ namespace FritzTV.Desktop.Tests;
 public sealed class RecordingPlaybackTests(HeadlessFixture fixture)
 {
     [Fact]
-    public async Task RetainedTransportPlaybackResolvesTheArchivedChannelService()
+    public async Task RetainedTransportPlaybackKeepsCapturedServiceAfterChannelRefresh()
     {
         await fixture.Session.Dispatch(async () =>
         {
@@ -29,7 +29,7 @@ public sealed class RecordingPlaybackTests(HeadlessFixture fixture)
                 await File.WriteAllBytesAsync(source, [0x47], TestContext.Current.CancellationToken).ConfigureAwait(true);
                 var recording = new RecordingInstance(Guid.NewGuid(), Guid.NewGuid(), channel.Id, "Retained source",
                     DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddMinutes(1), DateTimeOffset.UnixEpoch,
-                    RecordingState.Partial, source, Path.Combine(directory, "missing.mkv"));
+                    RecordingState.Partial, source, Path.Combine(directory, "missing.mkv"), ServiceId: 4321);
                 var playback = new FakePlaybackController();
                 using var http = new HttpClient(new RejectNetworkHandler());
                 var text = new UiText();
@@ -39,7 +39,7 @@ public sealed class RecordingPlaybackTests(HeadlessFixture fixture)
                 };
                 await viewModel.PlayRecordingCommand.ExecuteAsync(null).ConfigureAwait(true);
                 Assert.Equal(source, playback.LastFilePath);
-                Assert.Equal(1234, playback.LastFileServiceId);
+                Assert.Equal(4321, playback.LastFileServiceId);
                 Assert.Empty(await repository.GetChannelsAsync(TestContext.Current.CancellationToken).ConfigureAwait(true));
             }
             finally

@@ -76,7 +76,12 @@ python packaging/collect-licenses.py src/FritzTV.Desktop/obj/project.assets.json
 $iscc = @(
   "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
   "$env:LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
-) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+) | Where-Object {
+  if (-not (Test-Path -LiteralPath $_)) { return $false }
+  $version = (Get-Item -LiteralPath $_).VersionInfo
+  $version.ProductMajorPart -eq 6 -and $version.ProductMinorPart -eq 7 -and
+    $version.ProductBuildPart -eq 3 -and $version.ProductPrivatePart -eq 0
+} | Select-Object -First 1
 if (-not $iscc) { throw 'Install the pinned Inno Setup compiler first.' }
 & $iscc '/DAppVersion=0.1.0' packaging/windows.iss
 ```

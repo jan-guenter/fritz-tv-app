@@ -212,9 +212,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
 
         if (_filePlayback)
         {
-            long length = Math.Max(0, Interlocked.Read(ref _lengthMilliseconds));
-            long elapsed = Math.Clamp(Interlocked.Read(ref _elapsedMilliseconds), 0, length);
-            return new PlaybackSnapshot(false, _paused, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddMilliseconds(length), DateTimeOffset.UnixEpoch.AddMilliseconds(elapsed), false, null);
+            return PlaybackSnapshot.ForRecording(_paused, Interlocked.Read(ref _elapsedMilliseconds), Interlocked.Read(ref _lengthMilliseconds));
         }
 
         return null;

@@ -19,6 +19,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private static readonly Action<ILogger, Guid, Exception?> LogCaptureFailure = LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(2, "CaptureFailed"), "Recording {RecordingId} failed outside its capture handler; source data was retained.");
     private static readonly Action<ILogger, Guid, RecordingState, string, Exception?> LogRecordingProblem = LoggerMessage.Define<Guid, RecordingState, string>(LogLevel.Warning, new EventId(3, "RecordingProblem"), "Recording {RecordingId} entered {State}: {Reason}");
     private const int MaximumDiagnosticLength = 2048;
+    private const int MaximumTrackedDefinitionFailures = 256;
     private static readonly Action<ILogger, string, string, Exception?> LogInvalidDefinition = LoggerMessage.Define<string, string>(LogLevel.Warning, new EventId(5, "InvalidStoredTimer"), "Stored timer {TimerId} was ignored: {Reason}");
     private static readonly Action<ILogger, Guid, Exception?> LogPowerWarning = LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(4, "SleepInhibitionUnavailable"), "Recording {RecordingId} continues without automatic sleep protection; keep the computer awake.");
     private readonly AppRepository repository;
@@ -31,6 +32,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private readonly CancellationTokenSource shutdown = new();
     private readonly Lazy<Task> shutdownPreparation;
     private readonly ConcurrentDictionary<Guid, CaptureJob> active = new();
+    private readonly Dictionary<string, string> definitionFailures = new(StringComparer.Ordinal);
+    private bool definitionFailureLimitReported;
     private bool recovered;
     private DateTimeOffset nextMaterialization = DateTimeOffset.MinValue;
     private DateTimeOffset nextGuideUpdate = DateTimeOffset.MinValue;
@@ -309,15 +312,10 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         var definitions = await repository.GetDefinitionsAsync(cancellationToken).ConfigureAwait(false);
         foreach (var definition in definitions.Where(item => item.StartPadding is null || item.EndPadding is null))
         {
-            try
+            var resolved = ResolvePadding(definition, settings);
+            if (TryExpandDefinition(resolved, out _))
             {
-                ValidateDefinition(definition);
-                var resolved = ResolvePadding(definition, settings);
                 await repository.ResolveDefinitionPaddingAsync(resolved, definition.EffectiveStartPadding, definition.EffectiveEndPadding, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (IsDefinitionFailure(exception))
-            {
-                ReportDefinitionFailure(definition.Id.ToString(), exception.Message, exception);
             }
         }
     }
@@ -331,6 +329,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private async Task<IReadOnlyList<RecordingDefinition>> ReadDefinitionsAsync(CancellationToken cancellationToken)
     {
         var snapshot = await repository.GetDefinitionSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        PruneDefinitionFailures(snapshot);
         foreach (var failure in snapshot.Failures)
         {
             ReportDefinitionFailure(failure.Id, failure.Message, null);
@@ -341,16 +340,26 @@ public sealed class RecordingCoordinator : IAsyncDisposable
 
     private async Task TryMaterializeDefinitionAsync(RecordingDefinition definition, CancellationToken cancellationToken)
     {
+        if (TryExpandDefinition(definition, out var expanded))
+        {
+            await MaterializeDefinitionAsync(definition, expanded, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private bool TryExpandDefinition(RecordingDefinition definition, out IReadOnlyList<RecordingInstance> expanded)
+    {
         try
         {
             ValidateDefinition(definition);
             var now = clock.GetUtcNow();
-            var expanded = ScheduleCalculator.Expand(definition, now.AddDays(-31), now.AddDays(14), now);
-            await MaterializeDefinitionAsync(definition, expanded, cancellationToken).ConfigureAwait(false);
+            expanded = ScheduleCalculator.Expand(definition, now.AddDays(-31), now.AddDays(14), now);
+            return true;
         }
         catch (Exception exception) when (IsDefinitionFailure(exception))
         {
             ReportDefinitionFailure(definition.Id.ToString(), exception.Message, exception);
+            expanded = [];
+            return false;
         }
     }
 
@@ -360,12 +369,68 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             throw new ArgumentException("A stored timer requires a channel, title, and time zone.", nameof(definition));
         }
+
+        _ = TimeZoneInfo.FindSystemTimeZoneById(definition.TimeZoneId);
     }
 
-    private static bool IsDefinitionFailure(Exception exception) => exception is ArgumentException or TimeZoneNotFoundException or InvalidTimeZoneException or InvalidDataException or System.Text.Json.JsonException;
+    private static bool IsDefinitionFailure(Exception exception) => exception is ArgumentException or TimeZoneNotFoundException or InvalidTimeZoneException;
 
-    private void ReportDefinitionFailure(string id, string message, Exception? exception) => LogInvalidDefinition(logger,
-        id.Length <= 128 ? id : id[..128], message.Length <= MaximumDiagnosticLength ? message : message[..MaximumDiagnosticLength], exception);
+    private void PruneDefinitionFailures(RecordingDefinitionSnapshot snapshot)
+    {
+        var failedIds = snapshot.Failures.Select(item => item.Id.Length <= 128 ? item.Id : item.Id[..128]).ToHashSet(StringComparer.Ordinal);
+        var definitions = snapshot.Definitions.ToDictionary(item => item.Id.ToString(), StringComparer.Ordinal);
+        foreach (string id in definitionFailures.Keys.ToArray())
+        {
+            if (failedIds.Contains(id))
+            {
+                continue;
+            }
+
+            if (definitions.TryGetValue(id, out var definition))
+            {
+                try
+                {
+                    ValidateDefinition(definition);
+                    _ = ScheduleCalculator.Expand(definition, clock.GetUtcNow().AddDays(-31), clock.GetUtcNow().AddDays(14), clock.GetUtcNow());
+                }
+                catch (Exception exception) when (IsDefinitionFailure(exception))
+                {
+                    continue;
+                }
+            }
+
+            definitionFailures.Remove(id);
+        }
+
+        if (definitionFailures.Count < MaximumTrackedDefinitionFailures)
+        {
+            definitionFailureLimitReported = false;
+        }
+    }
+
+    private void ReportDefinitionFailure(string id, string message, Exception? exception)
+    {
+        id = id.Length <= 128 ? id : id[..128];
+        message = message.Length <= MaximumDiagnosticLength ? message : message[..MaximumDiagnosticLength];
+        if (definitionFailures.TryGetValue(id, out string? previous) && string.Equals(previous, message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (previous is null && definitionFailures.Count >= MaximumTrackedDefinitionFailures)
+        {
+            if (!definitionFailureLimitReported)
+            {
+                definitionFailureLimitReported = true;
+                LogInvalidDefinition(logger, id, "Additional invalid timer diagnostics were suppressed; repair the previously reported stored timers.", null);
+            }
+
+            return;
+        }
+
+        definitionFailures[id] = message;
+        LogInvalidDefinition(logger, id, message, exception);
+    }
 
     private async Task StartDueInstancesAsync(IReadOnlyList<RecordingDefinition> definitions, CancellationToken cancellationToken)
     {
@@ -447,6 +512,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private async Task<RecordingInstance> StartCaptureAsync(RecordingInstance instance, TvChannel channel, AppSettings settings, BufferedPlayback? playback, DateTimeOffset? from, bool retainSource, CancellationToken cancellationToken)
     {
         using var startCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
+        channel = channel with { ServiceId = instance.ServiceId ?? channel.ServiceId };
         Directory.CreateDirectory(settings.RecordingDirectory);
         CheckFreeSpace(settings);
         IRecordingInput? input = null;
@@ -458,7 +524,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             input = await inputs.OpenAsync(channel, playback, from, startCancellation.Token).ConfigureAwait(false);
             (inhibition, string? warning) = await AcquireInhibitionAsync(instance.Id, startCancellation.Token).ConfigureAwait(false);
-            instance = instance with { Warning = AppendError(instance.Warning, warning) };
+            instance = instance with { Warning = AppendError(instance.Warning, warning), ServiceId = instance.ServiceId ?? input.ServiceId };
             var source = instance.SourcePath ?? CreateSourcePath(settings.RecordingDirectory, instance);
             writer = new FileStream(source, FileMode.Append, FileAccess.Write, FileShare.Read, 188 * 256, FileOptions.Asynchronous);
             var output = instance.OutputPath ?? Path.ChangeExtension(source, channel.Kind == ChannelKind.Radio ? ".mka" : ".mkv");
@@ -534,7 +600,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     {
         string? error = job.Partial ? job.Instance.Error ?? "Recording started after part of the requested interval was missed." : null;
         job.Error = error;
-        var serviceId = job.Channel.ServiceId;
+        var serviceId = job.Instance.ServiceId ?? input.ServiceId;
         try
         {
             await using (inhibition.ConfigureAwait(false))
@@ -560,13 +626,14 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             try
             {
+                job.Instance = job.Instance with { ServiceId = job.Instance.ServiceId ?? job.ServiceId ?? serviceId };
                 if (job.Interrupted || shutdown.IsCancellationRequested)
                 {
                     await SaveAsync(job.Instance with { State = RecordingState.Partial, NeedsRecovery = true, Error = AppendError(error, "Capture stopped when the application exited; transport data was retained.") }, CancellationToken.None).ConfigureAwait(false);
                 }
                 else
                 {
-                    await FinalizeCaptureAsync(job.Instance, job.Channel with { ServiceId = serviceId }, job.RetainSource, job.Partial, error, CancellationToken.None).ConfigureAwait(false);
+                    await FinalizeCaptureAsync(job.Instance, job.Channel, job.RetainSource, job.Partial, error, CancellationToken.None).ConfigureAwait(false);
                 }
             }
             finally
@@ -683,6 +750,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
                 checkedAt = clock.GetTimestamp();
             }
 
+            await PersistCaptureServiceIdAsync(job, input.ServiceId).ConfigureAwait(false);
             job.Continuity.Inspect(iterator.Current.Span);
             await writer.WriteAsync(iterator.Current, job.Cancellation.Token).ConfigureAwait(false);
             if (!iterator.Current.IsEmpty)
@@ -694,6 +762,30 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         if (!job.Cancellation.IsCancellationRequested && clock.GetUtcNow() < job.Instance.End)
         {
             throw new ReceptionException("The tuner stream ended before recording was stopped.");
+        }
+    }
+
+    private async Task PersistCaptureServiceIdAsync(CaptureJob job, int? serviceId)
+    {
+        if (serviceId is null || job.Instance.ServiceId == serviceId)
+        {
+            return;
+        }
+
+        await gate.WaitAsync(job.Cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            if (job.Instance.ServiceId is not null && job.Instance.ServiceId != serviceId)
+            {
+                throw new ReceptionException("The tuner changed the captured programme identity; the original transport source was retained.");
+            }
+
+            job.Instance = job.Instance with { ServiceId = serviceId };
+            await SaveAsync(job.Instance, job.Cancellation.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -736,6 +828,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private async Task FinalizeCaptureAsync(RecordingInstance instance, TvChannel channel, bool retainSource, bool partial, string? error, CancellationToken cancellationToken)
     {
         instance = instance with { NeedsRecovery = false };
+        channel = channel with { ServiceId = instance.ServiceId };
         if (instance.SourcePath is null || instance.OutputPath is null || !File.Exists(instance.SourcePath) || new FileInfo(instance.SourcePath).Length == 0)
         {
             await SaveAsync(instance with { State = RecordingState.Failed, Error = AppendError(error, "No transport data was captured.") }, cancellationToken).ConfigureAwait(false);
@@ -810,21 +903,13 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         var instances = await repository.GetRecordingsAsync(cancellationToken).ConfigureAwait(false);
         foreach (var definition in await repository.GetDefinitionsAsync(cancellationToken).ConfigureAwait(false))
         {
-            try
-            {
-                await UpdateGuideTimerAsync(definition, guide, instances, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (IsDefinitionFailure(exception))
-            {
-                ReportDefinitionFailure(definition.Id.ToString(), exception.Message, exception);
-            }
+            await UpdateGuideTimerAsync(definition, guide, instances, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task UpdateGuideTimerAsync(RecordingDefinition definition, IReadOnlyList<Programme> guide, IReadOnlyList<RecordingInstance> instances, CancellationToken cancellationToken)
     {
-        ValidateDefinition(definition);
-        if (definition.EventId is null || definition.RepeatOn != Weekdays.None || instances.Any(item => item.DefinitionId == definition.Id && (item.SourcePath is not null || item.State is not (RecordingState.Scheduled or RecordingState.Conflict))))
+        if (!TryExpandDefinition(definition, out _) || definition.EventId is null || definition.RepeatOn != Weekdays.None || instances.Any(item => item.DefinitionId == definition.Id && (item.SourcePath is not null || item.State is not (RecordingState.Scheduled or RecordingState.Conflict))))
         {
             return;
         }
@@ -842,8 +927,12 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             return;
         }
 
-        await repository.UpdateDefinitionTimingAsync(definition with { Start = programme.Start, End = programme.End }, cancellationToken).ConfigureAwait(false);
-        Changed?.Invoke(this, EventArgs.Empty);
+        var updated = definition with { Start = programme.Start, End = programme.End };
+        if (TryExpandDefinition(updated, out _))
+        {
+            await repository.UpdateDefinitionTimingAsync(updated, cancellationToken).ConfigureAwait(false);
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private static bool ProgrammeMatchesChannel(Programme programme, TvChannel channel) => channel.ServiceIdentity is { } identity

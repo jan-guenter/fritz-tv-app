@@ -66,4 +66,29 @@ Windows activation diagnosis also proved that zero-sized named-pipe buffers can 
 
 The final infrastructure run passed **112/116 tests**, with four documented opt-in skips and zero failures. Scheduler isolation passed **4/4**, including a typed malformed EPG row. The strict full-solution build reported zero warnings/errors, and the exact full-solution formatting verification passed.
 
-Status: **final review and native warmup-cover execution pending**. All reviewed product corrections have focused validation. A further completed review must be recorded rather than inferred from passing builds.
+Status at `cd207dc`: the reviewed corrections passed the strict full-solution build, **138/142 tests** with four opt-in skips, and formatting. The final scoped review below then identified additional follow-ups; this checkpoint was not a clean final review.
+
+## Final scoped correction review
+
+The next CodeRabbit review completed successfully on **2026-11-05 at 07:30:46 UTC** using CLI **0.9.2**. It compared `cd207dc` with `556d878`:
+
+```bash
+coderabbit review --agent --deep \
+  --base-commit 556d8781b0f484a4df40b8b66110387c0742d4fa \
+  --include-untracked -c AGENTS.md .coderabbit.yaml
+```
+
+CodeRabbit raised **8 issues: three major, two minor, and three trivial**, with no duplicate reports and no critical issues. The correction status is explicit below.
+
+| Severity | File | Impact and correction | Validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [SsdpNetworkTests.cs](../../tests/FritzTV.Infrastructure.Tests/SsdpNetworkTests.cs) | Real SAT>IP responders made the opt-in test's global single-result assertion fail. Assert uniqueness of the synthetic URI while accepting other devices. | Implemented. The loopback fixture also emits an additional distinct device URI and passes with that URI present plus one copy of the duplicated synthetic URI. |
+| ⚠️ Major | [MainWindowViewModel.Recordings.cs](../../src/FritzTV.Desktop/ViewModels/MainWindowViewModel.Recordings.cs) | An archived TS recording used the channel's current SID, which can differ from the capture after refresh. Persist actual capture identity and use it for archived playback. | Backward-compatible `RecordingInstance.ServiceId` is persisted from the actual capture, including late PMT resolution, and retained across retry/recovery. Six identity lifecycle tests pass; legacy null SID uses source probing for finalization. Archived playback uses only that captured SID. Its regression keeps SID 4321 selected after the current channel changes to 1234; the desktop follow-up run passes 22/22. |
+| ⚠️ Major | [LibVlcPlaybackController.cs](../../src/FritzTV.Desktop/Services/LibVlcPlaybackController.cs) | A positive file cursor was clamped to zero while LibVLC still reported unknown length. Preserve elapsed time until a positive length is known. | Implemented. Unknown-length snapshots retain positive elapsed time and clamp only after a positive length arrives. Four ordering/clamp cases pass in the 22/22 desktop run; the retained-TS visual opacity/cursor validation above remains the native file-playback evidence. |
+| ℹ️ Minor | [SsdpNetworkTests.cs](../../tests/FritzTV.Infrastructure.Tests/SsdpNetworkTests.cs) | Another host's M-SEARCH could be mistaken for the selected-interface request. Filter its source address before accepting it. | Implemented; the selected-interface loopback fixture passes. Actual reachable-LAN validation remains pending. |
+| ℹ️ Minor | [verification.md](verification.md) | The documented installer compiler lookup selected the first existing Inno Setup executable regardless of its version. Require the pinned 6.7.3 compiler. | Implemented. The documented lookup requires product version parts 6/7/3/0 before selecting ISCC, accepting the equivalent 6.7.3 and 6.7.3.0 forms and rejecting older installations. |
+| ℹ️ Trivial | [LiveAutomationDiagnostics.cs](../../tests/FritzTV.Windows.UiTests/LiveAutomationDiagnostics.cs) | Raw FindFirst lookups miss controls behind the embedded video HWND. Include working control-view ID-specific state. | Implemented as an additional `ControlViewById` section. The raw lookup section is intentionally retained because its contrast with the same HWND's control-view results proved the automation traversal defect. Strict Windows-targeted build passes. |
+| ℹ️ Trivial | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Repeated invalid persisted definitions emitted identical warnings every scheduler tick. Bound and deduplicate diagnostic state while permitting a repaired definition to be reported again if it later fails. | Implemented. A bounded diagnostic cache suppresses unchanged bad-definition warnings; both independent repair and deletion regressions pass and permit a fresh warning after the same ID becomes invalid again. |
+| ℹ️ Trivial | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Broad definition catches could mislabel malformed stored channels/recordings as invalid timer definitions. Isolate definition validation/expansion and let storage failures reach the outer scheduler diagnostic. | Implemented. Only definition validation/expansion is caught as a timer error; repository awaits run outside those catches. Padding/date arithmetic is preflighted before storage. Strict solution build and existing isolation/lifecycle regressions pass. |
+
+Owned corrective builds pass with zero warnings/errors; the updated synthetic multicast regression passes **1/1**. Final infrastructure checks pass **120/124 tests**, with four documented opt-in skips and zero failures; captured-identity lifecycle tests pass **6/6**, warning deduplication passes **2/2**, and full-solution formatting passes. Desktop follow-up tests pass **22/22** with zero build warnings/errors. All eight scoped issues are corrected with the stated validation; the raw diagnostic comparison was retained intentionally alongside the working lookup. This records resolved review issues, not a subsequent zero-issue CodeRabbit result. Native warmup-cover execution remains a separately tracked acceptance check.

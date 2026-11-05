@@ -64,6 +64,8 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
         public int FailingInputs { get; set; }
 
+        public int? ServiceId { get; set; } = 3;
+
         public string FailureMessage { get; set; } = "Synthetic transport interruption.";
 
         public TimeSpan HealthyInterval { get; set; }
@@ -95,7 +97,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
             }
 
             var index = Interlocked.Increment(ref opened);
-            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs, FailPriorityLease, FailBeforeWriting, () => clock.Advance(HealthyInterval), FailureMessage);
+            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs, FailPriorityLease, FailBeforeWriting, () => clock.Advance(HealthyInterval), FailureMessage, ServiceId);
             Latest[channel.Id] = input;
             if (index > FailingInputs)
             {
@@ -111,7 +113,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
         }
     }
 
-    internal sealed class TestInput(Action release, bool failAfterWrite = false, bool failPriorityLease = false, bool failBeforeWriting = false, Action? healthyProgress = null, string failureMessage = "Synthetic transport interruption.") : IRecordingInput
+    internal sealed class TestInput(Action release, bool failAfterWrite = false, bool failPriorityLease = false, bool failBeforeWriting = false, Action? healthyProgress = null, string failureMessage = "Synthetic transport interruption.", int? initialServiceId = 3) : IRecordingInput
     {
         private int disposed;
 
@@ -119,12 +121,13 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
         public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int? ServiceId => 3;
+        public int? ServiceId { get; private set; } = initialServiceId;
 
         public long LostPackets { get; set; }
 
         public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadAllAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            ServiceId ??= 3;
             var data = new byte[188 * 512];
             for (var offset = 0; offset < data.Length; offset += 188)
             {
@@ -184,8 +187,11 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
         public ConcurrentQueue<bool> Retained { get; } = new();
 
+        public ConcurrentQueue<int?> ServiceIds { get; } = new();
+
         public async Task<RecordingFinalizationResult> FinalizeAsync(string sourcePath, string outputPath, TvChannel channel, bool retainSource, CancellationToken cancellationToken = default)
         {
+            ServiceIds.Enqueue(channel.ServiceId);
             Entered.TrySetResult();
             if (WaitForRelease)
             {

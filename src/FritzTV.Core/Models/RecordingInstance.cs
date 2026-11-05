@@ -13,4 +13,5 @@ public sealed record RecordingInstance(
     string? OutputPath = null,
     string? Error = null,
     bool NeedsRecovery = false,
-    string? Warning = null);
+    string? Warning = null,
+    int? ServiceId = null);
