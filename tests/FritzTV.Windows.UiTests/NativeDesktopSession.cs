@@ -104,11 +104,11 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
         }
         finally
         {
-            Cleanup(Application);
+            Cleanup(Application, preserveMedia: true);
         }
     }
 
-    private void Cleanup(Application? launched)
+    private void Cleanup(Application? launched, bool preserveMedia = false)
     {
         _ = TryCleanup(() =>
         {
@@ -119,7 +119,13 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
         });
         _ = TryCleanup(() => launched?.Dispose());
         _ = TryCleanup(automation.Dispose);
-        if (TryCleanup(PreserveLogs))
+        bool preserved = TryCleanup(PreserveLogs);
+        if (preserveMedia)
+        {
+            preserved = TryCleanup(PreserveRequestedMedia) && preserved;
+        }
+
+        if (preserved)
         {
             _ = TryCleanup(() =>
             {
@@ -147,6 +153,19 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
 
     private static bool IsExpectedCleanupFailure(Exception exception) => exception is COMException or FlaUIException
         or InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException;
+
+    private void PreserveRequestedMedia()
+    {
+        bool enabled = string.Equals(Environment.GetEnvironmentVariable("FRITZTV_UI_RETAIN_MEDIA"), "1", StringComparison.Ordinal);
+        bool isCi = string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Environment.GetEnvironmentVariable("CI"), "1", StringComparison.Ordinal);
+        int copied = NativeMediaRetention.Copy(DataDirectory, Environment.GetEnvironmentVariable("FRITZTV_UI_ARTIFACTS"), enabled, isCi);
+        if (copied > 0)
+        {
+            Trace.TraceInformation("The isolated native test profile was retained in the explicitly requested private artifact directory.");
+        }
+    }
 
     private void PreserveLogs()
     {
