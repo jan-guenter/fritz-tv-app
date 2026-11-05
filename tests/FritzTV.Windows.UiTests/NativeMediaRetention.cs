@@ -14,14 +14,14 @@ internal static class NativeMediaRetention
             throw new InvalidOperationException("Media retention requires FRITZTV_UI_ARTIFACTS to name an absolute private directory outside the isolated profile.");
         }
 
-        string relativeDestination = Path.GetRelativePath(dataDirectory, artifactsDirectory);
+        string destination = Path.GetFullPath(Path.Combine(artifactsDirectory, Path.GetFileName(dataDirectory), "profile"));
+        string relativeDestination = Path.GetRelativePath(dataDirectory, destination);
         if (!Path.IsPathFullyQualified(relativeDestination) && !string.Equals(relativeDestination, "..", StringComparison.Ordinal)
             && !relativeDestination.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Retained media must be outside the profile that test cleanup deletes.");
         }
 
-        string destination = Path.Combine(artifactsDirectory, Path.GetFileName(dataDirectory), "profile");
         var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint };
         int copied = 0;
         foreach (string source in Directory.EnumerateFiles(dataDirectory, "*", options))

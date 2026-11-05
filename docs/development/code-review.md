@@ -17,7 +17,7 @@ Initial authentication failed despite a locally authenticated status. The offici
 
 The GitHub App is installed and PR #1 was marked ready, but the [bot status](https://github.com/jan-guenter/fritz-tv-app/pull/1#issuecomment-6647891537) updated at **2026-11-05 09:44:09 UTC** skipped the automatic review of `b12c72f`. It reported **232 selected files against the Essentials limit of 150**, plus **insufficient usage credits or metered capacity**. No automatic code review or new actionable inline findings resulted; account/billing settings were left unchanged.
 
-The three completed CLI reviews below produced **38 reports** in total (18 initial, 12 incremental and eight scoped follow-ups, including the documented duplicates). Their corrections and focused validation are the available review evidence. They do not establish a subsequent zero-issue GitHub App review.
+The four completed CLI reviews below produced **39 reports** in total (18 initial, 12 incremental, eight scoped correction reports and one fixture follow-up, including the documented duplicates). Their corrections and focused validation are the available review evidence. They do not establish a subsequent zero-issue GitHub App review.
 
 ## Issues and validation
 
@@ -98,3 +98,19 @@ CodeRabbit raised **8 issues: three major, two minor, and three trivial**, with 
 | ℹ️ Trivial | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Broad definition catches could mislabel malformed stored channels/recordings as invalid timer definitions. Isolate definition validation/expansion and let storage failures reach the outer scheduler diagnostic. | Implemented. Only definition validation/expansion is caught as a timer error; repository awaits run outside those catches. Padding/date arithmetic is preflighted before storage. Strict solution build and existing isolation/lifecycle regressions pass. |
 
 Owned corrective builds pass with zero warnings/errors; the updated synthetic multicast regression passes **1/1**. Final infrastructure checks pass **120/124 tests**, with four documented opt-in skips and zero failures; captured-identity lifecycle tests pass **6/6**, warning deduplication passes **2/2**, and full-solution formatting passes. Desktop follow-up tests pass **22/22** with zero build warnings/errors. All eight scoped issues are corrected with the stated validation; the raw diagnostic comparison was retained intentionally alongside the working lookup. This records resolved review issues, not a subsequent zero-issue CodeRabbit result. Native warmup-cover lifecycle assertions subsequently passed in the interactive Windows live case at `2a9fe43`; the complete live case still awaits successful short buffered-TV finalization, as recorded in the acceptance notes.
+
+## Scoped alias and native-fixture follow-up
+
+One additional CLI **0.9.2** review completed on **2026-11-05**, covering only committed changes from `2a9fe43` through `356b999`. Existing authentication succeeded; no CLI quota or account error occurred. It reviewed fourteen changed files and raised **one major issue**, with no duplicate reports:
+
+```bash
+coderabbit review --agent --deep -t committed \
+  --base-commit 2a9fe43bb298f519fc8491ba5d3540cff8f9f40b \
+  -c AGENTS.md .coderabbit.yaml
+```
+
+| Severity | File | Impact and correction | Validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [NativeMediaRetention.cs](../../tests/FritzTV.Windows.UiTests/NativeMediaRetention.cs) | Checking the artifact directory before constructing the destination accepted the profile's parent; the computed copy would then fall inside the profile being copied and deleted. Compute and normalize the final destination first, then reject containment before enumeration. | Implemented. Five synthetic retention cases passed on the actual Windows VM over SSH, including the new parent-directory regression, existing nested-destination rejection, valid external copy, default opt-out and CI privacy. The project builds with zero warnings/errors and formatting passes. No desktop or live media was used for these checks. |
+
+No additional review loop was run. This resolved report remains distinct from the capacity-blocked automatic GitHub App review and from the pending full live TV acceptance.

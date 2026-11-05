@@ -67,6 +67,26 @@ public sealed class NativeMediaRetentionTests
         }
     }
 
+    [Fact]
+    public void ArtifactParentIsRejectedWhenComputedDestinationFallsInsideProfile()
+    {
+        string root = CreateRoot();
+        try
+        {
+            string profile = Path.Combine(root, "profile");
+            Directory.CreateDirectory(profile);
+            string source = Path.Combine(profile, "capture.ts");
+            File.WriteAllBytes(source, [0x47, 0x22]);
+            Assert.Throws<InvalidOperationException>(() => NativeMediaRetention.Copy(profile, root, enabled: true, isCi: false));
+            Assert.False(Directory.Exists(Path.Combine(profile, "profile")));
+            Assert.Equal([source], Directory.GetFiles(profile, "*", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static string CreateRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "fritztv-media-retention-" + Guid.NewGuid().ToString("N"));
