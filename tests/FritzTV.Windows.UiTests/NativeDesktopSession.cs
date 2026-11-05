@@ -74,9 +74,17 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
         while (elapsed.Elapsed < timeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (condition())
+            try
             {
-                return;
+                if (condition())
+                {
+                    return;
+                }
+            }
+            catch (COMException exception) when (exception.HResult == unchecked((int)0x80040201))
+            {
+                // UIA_E_ELEMENTNOTAVAILABLE can occur while Avalonia rebuilds the
+                // native-video accessibility tree. The original deadline still applies.
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);

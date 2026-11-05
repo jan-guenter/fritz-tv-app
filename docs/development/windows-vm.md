@@ -196,7 +196,7 @@ Measured on 2026-11-05; reports retain UTC timestamps, versions and tested SHAs.
 | Authenticated MCP | Tool discovery, screenshot, accessibility, launch, click/type/save and independent readback passed; credentials remain outside Git |
 | Windows live reception | TV/radio RTP-carried MPEG-TS and FFmpeg decoding passed with zero detected loss in recorded probes; HTTP/RTSP-only probes were not counted |
 | Interactive runner | Registered `fritz-tv-win11`; interactive login task observed running; installed guard hash above and thirteen policy cases passed |
-| Hosted compilation/tests/packages | CI at `556d878` passed all five protected-main checks; 133 unit/headless cases included 130 passes and three native opt-in skips |
+| Hosted compilation/tests/packages | CI at `e063016` passed all five protected-main checks; 154 unit/headless cases included 150 passes and four native opt-in skips. The separate Windows UI project passed five fixture tests and skipped three interactive cases |
 | Windows installer lifecycle | `3209b17`: install 0.1.0, upgrade 0.1.1, reinstall preserving autostart, and uninstall cleanup passed in a private install directory; package test did not launch the GUI |
 | Native application acceptance | See the revision-specific [implementation evidence](../implementation-plan.md#current-execution-evidence); hosted native UI cases are intentionally skipped |
 | LAN multicast and physical hardware | SSDP requires a reachable LAN; representative GPU decoding and physical sleep behavior require physical Windows hardware |
