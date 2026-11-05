@@ -36,8 +36,10 @@ jobs:
       - name: Build with analyzers
         run: dotnet build --no-restore -c Release -warnaserror
       - name: Unit and headless UI tests
+        timeout-minutes: 5
         run: dotnet test --no-build -c Release --report-trx --results-directory artifacts/test-results
       - name: Compile native Windows test project
+        timeout-minutes: 5
         if: runner.os == 'Windows'
         shell: pwsh
         run: |

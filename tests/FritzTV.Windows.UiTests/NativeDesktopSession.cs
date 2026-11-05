@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Exceptions;
 using FlaUI.UIA3;
 
 namespace FritzTV.Windows.UiTests;
@@ -22,8 +24,18 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("FRITZTV_UI_APP")!) { UseShellExecute = false };
         start.Environment["FRITZTV_DATA_DIRECTORY"] = DataDirectory;
         start.Environment["FRITZTV_LOG_DIRECTORY"] = Path.Combine(DataDirectory, "logs");
-        Application = Application.Launch(start);
-        Window = Application.GetMainWindow(automation, TimeSpan.FromSeconds(30)) ?? throw new InvalidOperationException("The isolated desktop did not start. Quit any exploratory FRITZ TV instance before UI tests.");
+        Application? launched = null;
+        try
+        {
+            launched = Application.Launch(start);
+            Application = launched;
+            Window = Application.GetMainWindow(automation, TimeSpan.FromSeconds(30)) ?? throw new InvalidOperationException("The isolated desktop did not start. Quit any exploratory FRITZ TV instance before UI tests.");
+        }
+        catch
+        {
+            Cleanup(launched);
+            throw;
+        }
     }
 
     public AutomationElement Find(string id) => Window.FindFirstDescendant(condition => condition.ByAutomationId(id))
@@ -59,22 +71,55 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
                 }
             }
         }
+        catch (Exception exception) when (IsExpectedCleanupFailure(exception))
+        {
+            Trace.TraceWarning("Graceful native test shutdown failed; terminating its owned process: " + exception.Message);
+        }
         finally
         {
-            if (!Application.HasExited)
-            {
-                Application.Kill();
-            }
-
-            Application.Dispose();
-            automation.Dispose();
-            PreserveLogs();
-            if (Directory.Exists(DataDirectory))
-            {
-                Directory.Delete(DataDirectory, recursive: true);
-            }
+            Cleanup(Application);
         }
     }
+
+    private void Cleanup(Application? launched)
+    {
+        _ = TryCleanup(() =>
+        {
+            if (launched is not null && !launched.HasExited)
+            {
+                launched.Kill();
+            }
+        });
+        _ = TryCleanup(() => launched?.Dispose());
+        _ = TryCleanup(automation.Dispose);
+        if (TryCleanup(PreserveLogs))
+        {
+            _ = TryCleanup(() =>
+            {
+                if (Directory.Exists(DataDirectory))
+                {
+                    Directory.Delete(DataDirectory, recursive: true);
+                }
+            });
+        }
+    }
+
+    private static bool TryCleanup(Action cleanup)
+    {
+        try
+        {
+            cleanup();
+            return true;
+        }
+        catch (Exception exception) when (IsExpectedCleanupFailure(exception))
+        {
+            Trace.TraceWarning("Native test cleanup retained its original failure: " + exception.Message);
+            return false;
+        }
+    }
+
+    private static bool IsExpectedCleanupFailure(Exception exception) => exception is COMException or FlaUIException
+        or InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException;
 
     private void PreserveLogs()
     {

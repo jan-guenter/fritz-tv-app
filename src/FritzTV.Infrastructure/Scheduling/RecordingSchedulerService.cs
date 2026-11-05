@@ -21,7 +21,7 @@ public sealed class RecordingSchedulerService(RecordingCoordinator coordinator, 
             {
                 break;
             }
-            catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.Data.Common.DbException)
+            catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
                 LogTickFailure(logger, exception);
             }

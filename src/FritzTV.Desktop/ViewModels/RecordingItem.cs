@@ -25,5 +25,18 @@ public sealed class RecordingItem(RecordingInstance recording, UiText text)
 
     public bool CanPlay => File.Exists(Recording.OutputPath) || File.Exists(Recording.SourcePath);
 
-    public string Diagnostic => Recording.Error ?? string.Empty;
+    public string Diagnostic
+    {
+        get
+        {
+            string? error = Recording.Error;
+            string? warning = Recording.Warning;
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                return warning ?? string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(warning) ? error : error + Environment.NewLine + warning;
+        }
+    }
 }

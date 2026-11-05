@@ -271,10 +271,15 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     {
         if (_mediaPlayer is not null && Enum.TryParse(key, ignoreCase: false, out TeletextKey navigation))
         {
-            _mediaPlayer.Teletext = (int)navigation;
             if (navigation == TeletextKey.Index)
             {
-                _teletextPage = 100;
+                // VLC 3 rejects navigation keys while teletext is closed; page100
+                // explicitly enables the selected teletext stream as well.
+                SetTeletextPage(100);
+            }
+            else
+            {
+                _mediaPlayer.Teletext = (int)navigation;
             }
         }
     }
@@ -445,5 +450,6 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _paused = false;
         _pausedAt = null;
         _pendingBufferedSeek = null;
+        NativeOutputChanged?.Invoke(this, EventArgs.Empty);
     }
 }

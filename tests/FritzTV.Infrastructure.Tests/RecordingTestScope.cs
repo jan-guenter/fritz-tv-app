@@ -62,6 +62,12 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
         public int FailingInputs { get; set; }
 
+        public bool FailPriorityLease { get; set; }
+
+        public bool FailBeforeWriting { get; set; }
+
+        public TaskCompletionSource HealthyOpened { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public TaskCompletionSource Reopened { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int Limit { get; set; } = int.MaxValue;
@@ -83,8 +89,13 @@ internal sealed class RecordingTestScope : IAsyncDisposable
             }
 
             var index = Interlocked.Increment(ref opened);
-            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs);
+            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs, FailPriorityLease, FailBeforeWriting);
             Latest[channel.Id] = input;
+            if (index > FailingInputs)
+            {
+                HealthyOpened.TrySetResult();
+            }
+
             if (index > 1)
             {
                 Reopened.TrySetResult();
@@ -94,7 +105,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
         }
     }
 
-    internal sealed class TestInput(Action release, bool failAfterWrite = false) : IRecordingInput
+    internal sealed class TestInput(Action release, bool failAfterWrite = false, bool failPriorityLease = false, bool failBeforeWriting = false) : IRecordingInput
     {
         private int disposed;
 
@@ -116,10 +127,21 @@ internal sealed class RecordingTestScope : IAsyncDisposable
                 data[offset + 3] = 0x10;
             }
 
+            if (failAfterWrite && failBeforeWriting)
+            {
+                throw new IOException("Synthetic empty transport interruption.");
+            }
+
             yield return data;
             Written.TrySetResult();
             if (failAfterWrite)
             {
+                if (failPriorityLease)
+                {
+                    using var backlog = new MemoryStream(data);
+                    _ = await RecordingPriorityReader.ReadAsync(backlog, new byte[188], Task.FromException(new IOException("Synthetic recording-priority lease failure.")), cancellationToken).ConfigureAwait(false);
+                }
+
                 throw new IOException("Synthetic transport interruption.");
             }
 
@@ -204,9 +226,16 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
         public int Active => Volatile.Read(ref active);
 
+        public bool Fail { get; set; }
+
         public ValueTask<IAsyncDisposable> AcquireAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (Fail)
+            {
+                throw new IOException("Synthetic inhibitor unavailable.");
+            }
+
             Interlocked.Increment(ref active);
             return ValueTask.FromResult<IAsyncDisposable>(new Token(() => Interlocked.Decrement(ref active)));
         }

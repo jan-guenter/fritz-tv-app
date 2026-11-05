@@ -109,6 +109,37 @@ public sealed class SessionManagerTests
         Assert.False(lease.Session.IsRunning);
     }
 
+    [Fact]
+    public async Task CanceledPidRequestPoisonsConnectionAndCannotConsumeALateReply()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var server = new LoopbackRtspServer(blockPidResponse: true);
+        await using var session = await SatIpSession.OpenAsync(new Uri($"rtsp://127.0.0.1:{server.Port}/?freq=444&pids=0,100"), 32600, 32727, cancellationToken);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pending = session.UpdatePidsAsync([200], [], caller.Token);
+        await server.PidRequest.Task.WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+        await caller.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        server.ReleasePidResponse.TrySetResult();
+        await Assert.ThrowsAsync<IOException>(() => session.UpdatePidsAsync([300], [], cancellationToken));
+        Assert.NotNull(session.Failure);
+        Assert.DoesNotContain(server.Requests, request => request.Contains("addpids=300", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StandardNonzeroSequencesAreEchoedAndMismatchesAreRejected()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var echo = new LoopbackRtspServer(echoSequence: true);
+        await using (var session = await SatIpSession.OpenAsync(new Uri($"rtsp://127.0.0.1:{echo.Port}/?pids=0,100"), 32800, 32927, cancellationToken))
+        {
+            await session.UpdatePidsAsync([200], [], cancellationToken);
+            Assert.True(session.IsRunning);
+        }
+        await using var wrong = new LoopbackRtspServer(wrongSequence: true);
+        await Assert.ThrowsAsync<InvalidDataException>(() => SatIpSession.OpenAsync(new Uri($"rtsp://127.0.0.1:{wrong.Port}/?pids=0,100"), 32800, 32927, cancellationToken));
+    }
+
     private static async Task<ReadOnlyMemory<byte>> ReadFirstBatchAsync(ChannelLease lease, CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

@@ -28,6 +28,11 @@ public sealed partial class MainWindow : Window
             {
                 viewModel.IsFullscreen = WindowState == WindowState.FullScreen;
             }
+
+            if (args.Property == IsVisibleProperty || args.Property == WindowStateProperty)
+            {
+                UpdateNativeOutput();
+            }
         };
         TimelineSlider.AddHandler(PointerPressedEvent, OnTimelinePressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         TimelineSlider.AddHandler(PointerReleasedEvent, OnTimelineReleased, RoutingStrategies.Bubble, handledEventsToo: true);
@@ -128,7 +133,7 @@ public sealed partial class MainWindow : Window
 
         // Never hide NativeControlHost while VLC owns its HWND/X11 window. A separate
         // opaque cover also works on X11 without a transparent-window compositor.
-        if (_player?.IsOutputReady == true)
+        if (_player?.IsOutputReady == true || _player?.GetSnapshot() is null || !IsVisible || WindowState == WindowState.Minimized)
         {
             _warmupCover?.Hide();
         }

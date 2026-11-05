@@ -131,7 +131,7 @@ public sealed class SatIpRecordingInputFactory(AppRepository repository, SatIpSe
             var buffer = new byte[188 * 256];
             while (true)
             {
-                var count = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                var count = await RecordingPriorityReader.ReadAsync(reader, buffer, drain, cancellationToken).ConfigureAwait(false);
                 if (count == 0)
                 {
                     yield break;

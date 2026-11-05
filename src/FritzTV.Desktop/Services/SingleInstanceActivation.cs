@@ -8,6 +8,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
 {
     private readonly InstanceOwnership ownership;
     private NamedPipeServerStream server;
+    private Task connectionReady;
     private readonly CancellationTokenSource lifetime = new();
     private Task? listener;
     private int disposed;
@@ -17,6 +18,8 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
         this.ownership = ownership;
         PipeName = pipeName;
         server = CreateServer(pipeName);
+        // Windows clients need a pending connection even while the desktop host is starting.
+        connectionReady = server.WaitForConnectionAsync(lifetime.Token);
     }
 
     public event EventHandler? ActivationRequested;
@@ -50,7 +53,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
     public void StartListening()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        listener ??= Task.Run(() => ListenAsync(lifetime.Token));
+        listener ??= ListenAsync(lifetime.Token);
     }
 
     public async ValueTask DisposeAsync()
@@ -67,6 +70,17 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
             {
                 await listener.ConfigureAwait(false);
             }
+            else
+            {
+                try
+                {
+                    await connectionReady.ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is OperationCanceledException or IOException)
+                {
+                    // The protocol loop never started; its pending accept still needs observing.
+                }
+            }
         }
         finally
         {
@@ -76,7 +90,8 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
         }
     }
 
-    private static NamedPipeServerStream CreateServer(string name) => new(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+    // A zero-sized Windows pipe blocks a client's first byte until the desktop starts reading.
+    private static NamedPipeServerStream CreateServer(string name) => new(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, 256, 256);
 
     private static async Task ActivateAsync(string name, CancellationToken cancellationToken)
     {
@@ -91,7 +106,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
                     await SendActivationAsync(name, timeout.Token).ConfigureAwait(false);
                     return;
                 }
-                catch (IOException)
+                catch (Exception exception) when (exception is IOException or TimeoutException)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token).ConfigureAwait(false);
                 }
@@ -106,7 +121,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
     private static async Task SendActivationAsync(string name, CancellationToken cancellationToken)
     {
         using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await client.ConnectAsync(250, cancellationToken).ConfigureAwait(false);
         await client.WriteAsync(new byte[] { 1 }, cancellationToken).ConfigureAwait(false);
         await client.FlushAsync(cancellationToken).ConfigureAwait(false);
         var acknowledgment = new byte[1];
@@ -125,7 +140,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
             NamedPipeServerStream connection = server;
             try
             {
-                await connection.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await connectionReady.ConfigureAwait(false);
                 using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 request.CancelAfter(TimeSpan.FromSeconds(5));
                 var command = new byte[1];
@@ -154,6 +169,7 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
                     {
                         // Keep the shared listener alive while replacing a disconnected instance.
                         server = CreateServer(PipeName);
+                        connectionReady = server.WaitForConnectionAsync(cancellationToken);
                     }
                 }
                 finally

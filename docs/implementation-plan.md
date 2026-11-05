@@ -12,7 +12,7 @@ The first implementation action was to create root `AGENTS.md`. It is the contri
 6. Recording, timers, conflicts, recovery, and power integration.
 7. Installers, upgrades, autostart, and real-device acceptance.
 
-Gates are accepted only with recorded evidence. A prototype or a unit test does not establish native-media acceptance. The Windows bootstrap is the immediate execution scope; independent repository foundation and protocol work may proceed in parallel.
+Gates are accepted only with recorded evidence. A prototype or a unit test does not establish native-media acceptance. Windows bootstrap is complete. Application implementation and native acceptance follow the gates above; external hardware/LAN checks remain distinct from VM and synthetic evidence.
 
 ## Windows development environment
 
@@ -86,18 +86,18 @@ Hosted CI uses synthetic fixtures with original media. Live suites opt in to the
 
 ## Current execution evidence
 
-Verified on 2026-11-05; timestamps in machine reports are UTC.
+Verified on 2026-11-05; machine reports use UTC. Implementation is in [PR #1](https://github.com/jan-guenter/fritz-tv-app/pull/1). Root `AGENTS.md` was the first implementation action (commit `429f54c`). The integrated application checkpoint is `3209b173fb3d247591ec9e24638f9a4d163e3e1a`; activation/native-test corrections follow in `dea0b1b`.
 
-- Root AGENTS.md was created first; initial main commit429f54c and implementationcheckpoint62da75d are on GitHub. Draft PR: https://github.com/jan-guenter/fritz-tv-app/pull/1.
-- Linux SDK10.0.403 was installed after matching official SHA-512 metadata. Windows has all pinned tools installed; actual verification reports AllRequiredToolsInstalled=True.
-- Bootstrap passed native PS5 AST parsing and actual explicit/default-path execution. Already-installed package handling, per-user Inno discovery, private credentials, and persistent interactive tasks were exercised and corrected.
-- Authenticated Windows-MCP discovery, screenshots, accessibility, application launch, mouse input, keyboard input, save, and independent file readback passed. The host loopback18000 endpoint is registered in private Codex configuration. Both MCP and runner login tasks restarted successfully.
-- The repository runner fritz-tv-win11 is registered and interactive. Its private pre-job admission guard is installed outside the checkout; SHA25655ca3f9674c22c01c380ad32bf8ca262f5d4f418577e61241283d57adaffde62. All13 native positive/negative policy cases passed.
-- The initial sandboxed VirtualBox call created a disconnected management context; its reported snapshot was not counted as a backup. The guest was shut down normally, the actual runtime disk was reflink-backed-up and its header verified, original GUI/service exited, and saved metadata returned to the correct base disk. A host helper guard now refuses stale IPC contexts.
-- A genuine cold recovery snapshot fritz-tv-toolchain-ready-20261105 (UUID80a59afa-472b-4b1e-9433-c453588d349c) was created in the consistent context. The VM restarted, management reports running, and all32 reserved UDP forwards are present.
-- Exact Windows checkpoint62da75d built with0warnings/errors; all20 initial core/infrastructure/headless tests passed. Native FRITZ TV window and LibVLC view initialization succeeded. Later buffered/recording UI acceptance remains pending.
-- Windows live TV received8585RTP packets/11,297,860TSbytes with0detectedloss in10seconds; radio received957RTP packets/1,258,472TSbytes with0loss in6seconds. Both decode commands exited0. Raw mid-stream TV captures show initial PPS/open-GOP reference warnings; this is not a warning-free startup claim.
-- Windows RTCP announcements were not observed through NAT. Linux actualRTCP SES1 parsing passed (frontend/level/lock/quality/frequency); native Windows RTCP remains a diagnostics follow-up.
-- Backend default suites include62tests (59passed,3native opt-in skipped at the shared checkpoint); the three native synthetic TV/radio finalization and Linux sleep-inhibition checks passed separately. Further tests are being added.
-- Actual private ZDF30.76second capture finalized with H264,3AC3,DVBSUB andSubRip; extractedSubRip contained8timedcues. No broadcaster payload/caption text is committed.
-- Initial GitHub CI detected platform/RID lockfile mismatches; fixes are in the next checkpoint. Do not count CI or full application acceptance complete until the final committed revision passes.
+- The Windows VM has all pinned tools installed. Native PowerShell 5.1 verification reports `AllRequiredToolsInstalled=True`; both interactive MCP and GitHub runner processes run in console session 1 and restart after login.
+- Authenticated MCP discovery, screenshots, accessibility inspection, application launch, mouse/keyboard input, save, and independent file readback passed. Its endpoint and credentials are registered privately outside Git.
+- The runner has a private admission guard outside the checkout. All 13 allowed/rejected policy cases pass. It admits only this repository's dispatched main desktop workflow; hosted runners handle PR code.
+- The initial sandboxed VirtualBox call created a disconnected management context. Its reported snapshot was rejected as evidence. Recovery used normal guest shutdown, a reflink backup of the actual runtime disk with verified header, and a genuine cold snapshot `fritz-tv-toolchain-ready-20261105` (`80a59afa-472b-4b1e-9433-c453588d349c`). The host helper now refuses stale IPC contexts. All 32 reserved UDP forwards are present.
+- Exact Windows checkpoint `3209b17` restored locked dependencies, built with zero warnings/errors, passed 113 unit/headless tests (three native opt-ins skipped), and published a self-contained app. Subsequent native UI/media acceptance is recorded separately below.
+- Windows live TV/radio UDP and FFmpeg decoding passed. The audited standard-SAT>IP ZDF probe received 11,450 RTP packets / 15,068,200 TS bytes in ten seconds with zero detected loss. RTCP announcements remain unobserved through VirtualBox NAT; the same RTCP parser receives and decodes actual Linux SES1 signal announcements.
+- Real Linux four-tuner reception passed on four distinct frequencies with zero detected loss; a fifth frequency was rejected without interrupting recordings, shared-frequency consumers reused a tuner, and teardown released all four. FRITZ playlist `avm=1` was found to force frontend 1 and is removed from standard shared sessions.
+- Real Linux LibVLC live/retained-buffer playback, pause expiry, rewind, Go Live, and dynamic PMT-driven PID updates decoded and displayed video/audio with zero native errors or demux corruption/discontinuities. Hidden preroll precedes the visible cursor after expiry/seek.
+- Native synthetic TV/radio remux/decode and scoped sleep-inhibitor tests pass. A private 30.76-second ZDF capture finalized without AV re-encoding, preserving H.264, three AC3 tracks, DVB subtitles and eight teletext-derived SRT cues. Raw mid-GOP broadcast captures can emit decoder reference warnings; no warning-free raw-start claim is made.
+- Linux packages at `3209b17` passed actual dpkg install 0.1.0, upgrade 0.1.1, removal and purge inside a private user namespace/root. Desktop entries and 66 package license records passed validation. Host desktop cache triggers were deliberately excluded; no host installation/profile was changed.
+- Source includes transactional SQLite schema-3 migrations/backups, persisted ordering and DVB identities, bounded guide/timeshift storage, dynamic PID unions/reconnection, timer/conflict/recovery policies, rotating logs, single-instance activation, EN/DE UI, and reproducible Windows/Linux installers. See [verification commands](development/verification.md) and [runtime behavior](development/runtime-services.md).
+
+Native UI acceptance, final hosted CI, package results, and CodeRabbit review must be verified against their recorded final revisions before claiming all gates passed. SSDP needs reachable LAN multicast. Representative physical Windows GPU decoding and actual physical-machine sleep behavior remain separate external checks. A configured Renovate file does not by itself prove the GitHub App is installed.

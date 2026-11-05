@@ -12,4 +12,5 @@ public sealed record RecordingInstance(
     string? SourcePath = null,
     string? OutputPath = null,
     string? Error = null,
-    bool NeedsRecovery = false);
+    bool NeedsRecovery = false,
+    string? Warning = null);

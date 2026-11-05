@@ -181,8 +181,16 @@ public sealed class SatIpSession : IAsyncDisposable
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         var target = new UriBuilder(sessionUri) { Query = string.Join('&', query) }.Uri;
-        var response = await connection.SendAsync("PLAY", target, sessionId, cancellationToken: timeout.Token).ConfigureAwait(false);
-        response.EnsureSuccess();
+        try
+        {
+            var response = await connection.SendAsync("PLAY", target, sessionId, cancellationToken: timeout.Token).ConfigureAwait(false);
+            response.EnsureSuccess();
+        }
+        catch (Exception exception) when (connection.IsFaulted)
+        {
+            Abort(new IOException("The SAT>IP control connection lost synchronization; reception must reconnect.", exception));
+            throw;
+        }
 
         void Add(string name, IEnumerable<int> pids)
         {

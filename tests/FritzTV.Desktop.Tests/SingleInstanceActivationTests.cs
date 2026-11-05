@@ -36,14 +36,14 @@ public sealed class SingleInstanceActivationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AnAlreadyConnectedSecondaryCanAbandonBeforeListeningWithoutPoisoningLaterRequests(bool sendRequest)
+    public async Task AnAlreadyConnectedSecondaryCanAbandonWithoutPoisoningLaterRequests(bool sendRequest)
     {
         string name = "FritzTV.Test." + Guid.NewGuid().ToString("N");
         await using var primary = await SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken);
         Assert.NotNull(primary);
         using (var abandoned = new NamedPipeClientStream(".", primary.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly))
         {
-            await abandoned.ConnectAsync(TestContext.Current.CancellationToken);
+            await abandoned.ConnectAsync(1000, TestContext.Current.CancellationToken);
             if (sendRequest)
             {
                 await abandoned.WriteAsync(new byte[] { 1 }, TestContext.Current.CancellationToken);

@@ -61,7 +61,7 @@ public static class EitParser
     private static (string Title, string Description, string Language) ReadDescriptors(ReadOnlySpan<byte> descriptors, string preferredLanguage)
     {
         var shortTexts = new Dictionary<string, (string Title, string Description)>(StringComparer.Ordinal);
-        var extended = new Dictionary<string, SortedDictionary<int, (string Items, string Text)>>(StringComparer.Ordinal);
+        var extended = new Dictionary<string, SortedDictionary<int, (string Items, byte[] Text)>>(StringComparer.Ordinal);
         while (descriptors.Length >= 2)
         {
             var length = descriptors[1];
@@ -90,7 +90,7 @@ public static class EitParser
         if (extended.TryGetValue(language, out var pieces))
         {
             var labels = string.Join(Environment.NewLine, pieces.Values.Select(item => item.Items).Where(item => !string.IsNullOrWhiteSpace(item)));
-            var continuation = string.Concat(pieces.Values.Select(item => item.Text));
+            var continuation = DecodeExtendedText(pieces.Values.Select(item => item.Text).ToArray());
             extra = string.Join(Environment.NewLine, new[] { labels, continuation }.Where(item => !string.IsNullOrWhiteSpace(item)));
         }
         var description = string.Join(Environment.NewLine, new[] { shortText.Description, extra }.Where(item => !string.IsNullOrWhiteSpace(item)));
@@ -114,7 +114,7 @@ public static class EitParser
         output[Encoding.ASCII.GetString(body[..3])] = (DvbText.Decode(body.Slice(4, titleLength)), DvbText.Decode(body.Slice(5 + titleLength, textLength)));
     }
 
-    private static void ReadExtended(ReadOnlySpan<byte> body, Dictionary<string, SortedDictionary<int, (string Items, string Text)>> output)
+    private static void ReadExtended(ReadOnlySpan<byte> body, Dictionary<string, SortedDictionary<int, (string Items, byte[] Text)>> output)
     {
         var itemsLength = body[4];
         if (5 + itemsLength >= body.Length)
@@ -141,7 +141,39 @@ public static class EitParser
             output.Add(language, pieces);
         }
 
-        pieces[body[0] >> 4] = (items, DvbText.Decode(body.Slice(6 + itemsLength, textLength)));
+        pieces[body[0] >> 4] = (items, body.Slice(6 + itemsLength, textLength).ToArray());
+    }
+
+    private static string DecodeExtendedText(byte[][] segments)
+    {
+        if (segments.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var firstIndex = Array.FindIndex(segments, segment => segment.Length > 0);
+        if (firstIndex < 0)
+        {
+            return string.Empty;
+        }
+
+        var first = segments[firstIndex];
+        var prefixLength = first.Length == 0 || first[0] >= 0x20 ? 0 : first[0] == 0x10 ? Math.Min(3, first.Length) : 1;
+        var selector = first.AsSpan(0, prefixLength);
+        using var joined = new MemoryStream();
+        joined.Write(first);
+        foreach (var segment in segments.AsSpan(firstIndex + 1))
+        {
+            var text = segment.AsSpan();
+            if (prefixLength > 0 && text.StartsWith(selector))
+            {
+                text = text[prefixLength..];
+            }
+
+            joined.Write(text);
+        }
+
+        return DvbText.Decode(joined.GetBuffer().AsSpan(0, checked((int)joined.Length)));
     }
 
     private static string? ReadExtendedItems(ReadOnlySpan<byte> items)

@@ -166,8 +166,10 @@ public sealed class RecordingTests
         Assert.Contains(accessDenied ? "Synthetic recording access denied" : invalidContainer ? "Synthetic invalid container" : "Synthetic remux failure", partial.Error, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task ReceptionRetryKeepsTheSourceAndPrecedesNewTimersOnThatDevice()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReceptionRetryKeepsTheSourceAndPrecedesNewTimersOnThatDevice(bool priorityLeaseFailure)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = new RecordingTestScope();
@@ -176,6 +178,7 @@ public sealed class RecordingTests
         await scope.Repository.SaveChannelsAsync([other], cancellationToken);
         scope.Inputs.Limit = 1;
         scope.Inputs.FailingInputs = 1;
+        scope.Inputs.FailPriorityLease = priorityLeaseFailure;
         var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
         var first = scope.Inputs.Latest[channel.Id];
         await first.Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
@@ -190,7 +193,7 @@ public sealed class RecordingTests
         var partial = (await scope.Coordinator.GetRecordingsAsync(cancellationToken)).Single(item => item.Id == instance.Id);
         Assert.Equal(RecordingState.Partial, partial.State);
         Assert.True(new FileInfo(partial.SourcePath!).Length >= 2 * 188 * 512);
-        Assert.Contains("Synthetic transport interruption", partial.Error, StringComparison.Ordinal);
+        Assert.Contains(priorityLeaseFailure ? "recording-priority" : "Synthetic transport interruption", partial.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -232,6 +235,65 @@ public sealed class RecordingTests
         Assert.False(stopped.NeedsRecovery);
         Assert.Single(scope.Inputs.Attempts);
         Assert.Single(scope.Finalizer.Retained);
+    }
+
+    [Fact]
+    public async Task HealthyWritesResetTheBudgetAcrossFourSeparateReceptionOutages()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = new RecordingTestScope();
+        var channel = await scope.InitializeAsync(cancellationToken);
+        scope.Inputs.FailingInputs = 4;
+        var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
+        await scope.Inputs.HealthyOpened.Task.WaitAsync(TimeSpan.FromSeconds(12), cancellationToken);
+        await scope.Inputs.Latest[channel.Id].Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        await scope.Coordinator.StopAsync(instance.Id, cancellationToken);
+        Assert.Equal(5, scope.Inputs.Attempts.Count);
+        var partial = Assert.Single(await scope.Coordinator.GetRecordingsAsync(cancellationToken));
+        Assert.Equal(RecordingState.Partial, partial.State);
+        Assert.True(new FileInfo(partial.SourcePath!).Length >= 5 * 188 * 512);
+    }
+
+    [Fact]
+    public async Task ConsecutiveFailuresWithoutDataStillExhaustTheBoundedRetryBudget()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = new RecordingTestScope();
+        var channel = await scope.InitializeAsync(cancellationToken);
+        scope.Inputs.FailingInputs = 10;
+        scope.Inputs.FailBeforeWriting = true;
+        _ = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(12));
+        while (Assert.Single(await scope.Coordinator.GetRecordingsAsync(deadline.Token)).State != RecordingState.Failed)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(25), deadline.Token);
+        }
+
+        Assert.Equal(4, scope.Inputs.Attempts.Count);
+        Assert.False(scope.Inputs.HealthyOpened.Task.IsCompleted);
+        Assert.Equal(0, scope.Power.Active);
+    }
+
+    [Fact]
+    public async Task InhibitionFailureKeepsHealthyCaptureCompletedWithASeparateWarning()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = new RecordingTestScope();
+        var channel = await scope.InitializeAsync(cancellationToken);
+        scope.Power.Fail = true;
+        var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
+        await scope.Inputs.Latest[channel.Id].Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        Assert.Contains("Synthetic inhibitor unavailable", instance.Warning, StringComparison.Ordinal);
+        Assert.Null(instance.Error);
+        await scope.Coordinator.StopAsync(instance.Id, cancellationToken);
+        var completed = Assert.Single(await scope.Coordinator.GetRecordingsAsync(cancellationToken));
+        Assert.Equal(RecordingState.Completed, completed.State);
+        Assert.Null(completed.Error);
+        Assert.NotNull(completed.Warning);
+        Assert.True(File.Exists(completed.OutputPath));
+        Assert.False(File.Exists(completed.SourcePath));
+        Assert.False(Assert.Single(scope.Finalizer.Retained));
     }
 
     [Fact]

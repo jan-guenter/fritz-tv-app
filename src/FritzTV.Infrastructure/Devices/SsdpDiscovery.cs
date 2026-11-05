@@ -64,6 +64,7 @@ public sealed class SsdpDiscovery(IPAddress? localAddress = null)
         {
             using var client = new UdpClient(new IPEndPoint(address, 0));
             client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 2);
+            client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
             await client.SendAsync(Search, MulticastEndpoint, cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {

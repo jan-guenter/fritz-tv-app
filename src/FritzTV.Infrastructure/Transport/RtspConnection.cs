@@ -9,13 +9,20 @@ internal sealed class RtspConnection(TcpClient client) : IAsyncDisposable
     private readonly NetworkStream stream = client.GetStream();
     private readonly SemaphoreSlim gate = new(1, 1);
     private int sequence;
+    private bool faulted;
 
     public async Task<RtspResponse> SendAsync(string method, Uri target, string? session = null, string? transport = null, CancellationToken cancellationToken = default)
     {
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var request = new StringBuilder().Append(method).Append(' ').Append(target.AbsoluteUri).Append(" RTSP/1.0\r\nCSeq: ").Append(++sequence).Append("\r\nUser-Agent: FritzTV/0.1\r\n");
+            if (faulted)
+            {
+                throw new IOException("The RTSP connection is no longer synchronized; open a new session.");
+            }
+
+            var requestSequence = ++sequence;
+            var request = new StringBuilder().Append(method).Append(' ').Append(target.AbsoluteUri).Append(" RTSP/1.0\r\nCSeq: ").Append(requestSequence).Append("\r\nUser-Agent: FritzTV/0.1\r\n");
             if (session is not null)
             {
                 request.Append("Session: ").Append(session).Append("\r\n");
@@ -27,13 +34,37 @@ internal sealed class RtspConnection(TcpClient client) : IAsyncDisposable
             }
 
             request.Append("\r\n");
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(request.ToString()), cancellationToken).ConfigureAwait(false);
-            return await ReadResponseAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(request.ToString()), cancellationToken).ConfigureAwait(false);
+                var response = await ReadResponseAsync(cancellationToken).ConfigureAwait(false);
+                ValidateSequence(response, requestSequence);
+                return response;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or SocketException or OperationCanceledException or ObjectDisposedException)
+            {
+                faulted = true;
+                client.Close();
+                throw;
+            }
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    public bool IsFaulted => faulted;
+
+    private static void ValidateSequence(RtspResponse response, int expected)
+    {
+        if (!response.Headers.TryGetValue("CSeq", out var text) || !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var actual)
+            || (actual != 0 && actual != expected))
+        {
+            throw new InvalidDataException("The RTSP response does not match its request sequence.");
+        }
+
+        // FRITZ!Box SAT>IP replies use CSeq=0; nonzero sequences must still match.
     }
 
     private async Task<RtspResponse> ReadResponseAsync(CancellationToken cancellationToken)

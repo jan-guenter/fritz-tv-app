@@ -17,12 +17,15 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
 
     private readonly ConcurrentBag<TcpClient> connections = [];
 
-    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60, bool malformedKeepalive = false, bool missingSetupSession = false)
+    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60, bool malformedKeepalive = false, bool missingSetupSession = false, bool blockPidResponse = false, bool echoSequence = false, bool wrongSequence = false)
     {
         DeferFirstSetup = deferFirstSetup;
         SessionTimeoutSeconds = sessionTimeoutSeconds;
         MalformedKeepalive = malformedKeepalive;
         MissingSetupSession = missingSetupSession;
+        BlockPidResponse = blockPidResponse;
+        EchoSequence = echoSequence;
+        WrongSequence = wrongSequence;
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         acceptTask = AcceptAsync(lifetime.Token);
@@ -37,6 +40,16 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
     public bool MalformedKeepalive { get; }
 
     public bool MissingSetupSession { get; }
+
+    public bool BlockPidResponse { get; }
+
+    public bool EchoSequence { get; }
+
+    public bool WrongSequence { get; }
+
+    public TaskCompletionSource PidRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource ReleasePidResponse { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public TaskCompletionSource FirstSetup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -116,14 +129,7 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                 }
 
                 Requests.Enqueue(line);
-                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { Length: > 0 } header)
-                {
-                    var offset = header.IndexOf("client_port=", StringComparison.Ordinal);
-                    if (offset >= 0)
-                    {
-                        RtpPorts.Add(int.Parse(header[(offset + 12)..].Split('-')[0], CultureInfo.InvariantCulture));
-                    }
-                }
+                var requestSequence = await ReadHeadersAsync(reader, cancellationToken).ConfigureAwait(false);
 
                 if (line.StartsWith("SETUP ", StringComparison.Ordinal))
                 {
@@ -135,15 +141,13 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                     }
                 }
 
-                var response = FormattableString.Invariant($"RTSP/1.0 200 OK\r\nCSeq: 0\r\nSession: test-session;timeout={SessionTimeoutSeconds}\r\ncom.ses.streamID: 1\r\nContent-Length: 0\r\n\r\n");
-                if (MalformedKeepalive && line.StartsWith("OPTIONS ", StringComparison.Ordinal))
+                if (BlockPidResponse && (line.Contains("addpids=", StringComparison.Ordinal) || line.Contains("delpids=", StringComparison.Ordinal)))
                 {
-                    response = "Synthetic malformed RTSP status\r\n";
+                    PidRequest.TrySetResult();
+                    await ReleasePidResponse.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
-                else if (MissingSetupSession && line.StartsWith("SETUP ", StringComparison.Ordinal))
-                {
-                    response = "RTSP/1.0 200 OK\r\nCSeq: 0\r\nContent-Length: 0\r\n\r\n";
-                }
+
+                var response = Response(line, requestSequence);
                 await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(response), cancellationToken).ConfigureAwait(false);
             }
         }
@@ -152,4 +156,36 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
             // A canceled tuning attempt deliberately closes its RTSP connection.
         }
     }
+    private async Task<string> ReadHeadersAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var sequence = "0";
+        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { Length: > 0 } header)
+        {
+            var offset = header.IndexOf("client_port=", StringComparison.Ordinal);
+            if (offset >= 0)
+            {
+                RtpPorts.Add(int.Parse(header[(offset + 12)..].Split('-')[0], CultureInfo.InvariantCulture));
+            }
+            if (header.StartsWith("CSeq:", StringComparison.OrdinalIgnoreCase))
+            {
+                sequence = header[5..].Trim();
+            }
+        }
+        return sequence;
+    }
+
+    private string Response(string request, string sequence)
+    {
+        if (MalformedKeepalive && request.StartsWith("OPTIONS ", StringComparison.Ordinal))
+        {
+            return "Synthetic malformed RTSP status\r\n";
+        }
+        if (MissingSetupSession && request.StartsWith("SETUP ", StringComparison.Ordinal))
+        {
+            return "RTSP/1.0 200 OK\r\nCSeq: 0\r\nContent-Length: 0\r\n\r\n";
+        }
+        var reply = WrongSequence ? "999" : EchoSequence ? sequence : "0";
+        return FormattableString.Invariant($"RTSP/1.0 200 OK\r\nCSeq: {reply}\r\nSession: test-session;timeout={SessionTimeoutSeconds}\r\ncom.ses.streamID: 1\r\nContent-Length: 0\r\n\r\n");
+    }
+
 }

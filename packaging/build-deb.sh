@@ -6,6 +6,9 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
   printf 'Invalid semantic version: %s\n' "$version" >&2
   exit 2
 fi
+tilde='~'
+upstream_version="${version%%+*}"
+deb_version="${upstream_version/-/$tilde}${version#"$upstream_version"}"
 repository="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 output="$repository/artifacts/packages"
 staging="$(mktemp -d)"
@@ -16,7 +19,7 @@ python3 "$repository/packaging/collect-licenses.py" "$repository/src/FritzTV.Des
 install -m 644 "$repository/THIRD-PARTY-NOTICES.md" "$staging/opt/fritz-tv/THIRD-PARTY-NOTICES.md"
 cat > "$staging/DEBIAN/control" <<CONTROL
 Package: fritz-tv
-Version: $version
+Version: $deb_version
 Section: video
 Priority: optional
 Architecture: amd64

@@ -37,6 +37,17 @@ public sealed class DvbTests
         Assert.Equal("Original test programme: Grüße", programme.Description);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExtendedTextDecodesCharactersSplitAcrossDescriptorBoundaries(bool utf8)
+    {
+        byte[] first = utf8 ? [0x15, (byte)'G', (byte)'r', 0xc3] : [(byte)'G', (byte)'r', 0xc8];
+        byte[] second = utf8 ? [0x15, 0xbc, (byte)'s', (byte)'s', (byte)'e'] : [(byte)'u', (byte)'s', (byte)'s', (byte)'e'];
+        var programme = Assert.Single(EitParser.Parse(Guid.NewGuid(), DvbFixtures.EitWithDescriptors(ExtendedText(1, second), ExtendedText(0, first))));
+        Assert.EndsWith("Grüsse", programme.Description, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void EitRejectsCorruptionTruncationAndFutureVersion()
     {
@@ -90,6 +101,12 @@ public sealed class DvbTests
         body.Add((byte)encoded.Length);
         body.AddRange(encoded);
         return new byte[] { 0x4e, checked((byte)body.Count) }.Concat(body).ToArray();
+    }
+
+    private static byte[] ExtendedText(byte number, byte[] text)
+    {
+        byte[] header = [0x4e, checked((byte)(6 + text.Length)), (byte)((number << 4) | 1), (byte)'d', (byte)'e', (byte)'u', 0, checked((byte)text.Length)];
+        return header.Concat(text).ToArray();
     }
 
 }

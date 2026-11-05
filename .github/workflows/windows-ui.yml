@@ -31,9 +31,12 @@ jobs:
       - name: Verify interactive desktop and toolchain
         shell: pwsh
         run: |
-          ./scripts/dev/Initialize-WindowsVm.ps1 -VerifyOnly
+          ./scripts/dev/Initialize-WindowsVm.ps1 -VerifyOnly -WorkspaceRoot $PWD.Path
           New-Item artifacts -ItemType Directory -Force | Out-Null
-          Copy-Item (Join-Path $env:LOCALAPPDATA 'FritzTVDevelopment/verification.json') artifacts/toolchain.json
+          $reportPath = Join-Path $env:LOCALAPPDATA 'FritzTVDevelopment/verification.json'
+          Copy-Item $reportPath artifacts/toolchain.json
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if (-not $report.AllRequiredToolsInstalled) { throw 'Required Windows toolchain components are missing.' }
       - name: Build exact revision
         shell: pwsh
         run: |

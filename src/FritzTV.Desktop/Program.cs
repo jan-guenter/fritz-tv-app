@@ -10,7 +10,16 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        Activation = SingleInstanceActivation.CreateOrActivateAsync("FritzTV", CancellationToken.None).GetAwaiter().GetResult();
+        try
+        {
+            Activation = SingleInstanceActivation.CreateOrActivateAsync("FritzTV", CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.TraceWarning("The running FRITZ TV instance did not accept activation: " + exception.Message);
+            Console.Error.WriteLine("FRITZ TV could not activate its existing window: " + exception.Message);
+            return 1;
+        }
         if (Activation is null)
         {
             return 0;

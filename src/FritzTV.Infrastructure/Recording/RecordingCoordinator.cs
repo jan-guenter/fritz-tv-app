@@ -18,6 +18,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
 {
     private static readonly Action<ILogger, Guid, Exception?> LogCaptureFailure = LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(2, "CaptureFailed"), "Recording {RecordingId} failed outside its capture handler; source data was retained.");
     private static readonly Action<ILogger, Guid, RecordingState, string, Exception?> LogRecordingProblem = LoggerMessage.Define<Guid, RecordingState, string>(LogLevel.Warning, new EventId(3, "RecordingProblem"), "Recording {RecordingId} entered {State}: {Reason}");
+    private static readonly Action<ILogger, Guid, Exception?> LogPowerWarning = LoggerMessage.Define<Guid>(LogLevel.Warning, new EventId(4, "SleepInhibitionUnavailable"), "Recording {RecordingId} continues without automatic sleep protection; keep the computer awake.");
     private readonly AppRepository repository;
     private readonly TimeProvider clock;
     private readonly IRecordingInputFactory inputs;
@@ -408,7 +409,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         try
         {
             input = await inputs.OpenAsync(channel, playback, from, startCancellation.Token).ConfigureAwait(false);
-            inhibition = await power.AcquireAsync(startCancellation.Token).ConfigureAwait(false);
+            (inhibition, string? warning) = await AcquireInhibitionAsync(instance.Id, startCancellation.Token).ConfigureAwait(false);
+            instance = instance with { Warning = AppendError(instance.Warning, warning) };
             var source = instance.SourcePath ?? CreateSourcePath(settings.RecordingDirectory, instance);
             writer = new FileStream(source, FileMode.Append, FileAccess.Write, FileShare.Read, 188 * 256, FileOptions.Asynchronous);
             var output = instance.OutputPath ?? Path.ChangeExtension(source, channel.Kind == ChannelKind.Radio ? ".mka" : ".mkv");
@@ -421,9 +423,9 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             }
 
             added = true;
-            await SaveAsync(instance, startCancellation.Token).ConfigureAwait(false);
+            await SaveAsync(job.Instance, startCancellation.Token).ConfigureAwait(false);
             _ = ObserveCaptureAsync(job, input, inhibition, writer);
-            return instance;
+            return job.Instance;
         }
         catch
         {
@@ -450,6 +452,19 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             }
 
             throw;
+        }
+    }
+
+    private async ValueTask<(IAsyncDisposable Inhibition, string? Warning)> AcquireInhibitionAsync(Guid recordingId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await power.AcquireAsync(cancellationToken).ConfigureAwait(false), null);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
+        {
+            LogPowerWarning(logger, recordingId, exception);
+            return (NoInhibition.Instance, "Automatic sleep protection is unavailable; keep the computer awake during capture. " + exception.Message);
         }
     }
 
@@ -530,7 +545,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
                         input = await ReopenInputAsync(job).ConfigureAwait(false);
                     }
                     job.Reconnecting = false;
-                    await WriteInputAsync(job, input, writer).ConfigureAwait(false);
+                    await WriteInputAsync(job, input, writer, () => retries = 0).ConfigureAwait(false);
                     serviceId = input.ServiceId ?? serviceId;
                     if (input.LostPackets > 0)
                     {
@@ -601,7 +616,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task WriteInputAsync(CaptureJob job, IRecordingInput input, Stream writer)
+    private async Task WriteInputAsync(CaptureJob job, IRecordingInput input, Stream writer, Action onDataReceived)
     {
         using var readerLifetime = CancellationTokenSource.CreateLinkedTokenSource(job.Cancellation.Token);
         var iterator = input.ReadAllAsync(readerLifetime.Token).GetAsyncEnumerator(readerLifetime.Token);
@@ -622,6 +637,10 @@ public sealed class RecordingCoordinator : IAsyncDisposable
 
             job.Continuity.Inspect(iterator.Current.Span);
             await writer.WriteAsync(iterator.Current, job.Cancellation.Token).ConfigureAwait(false);
+            if (!iterator.Current.IsEmpty)
+            {
+                onDataReceived();
+            }
         }
 
         if (!job.Cancellation.IsCancellationRequested && clock.GetUtcNow() < job.Instance.End)
@@ -860,6 +879,13 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             Interrupted |= interrupted;
             try { Cancellation.Cancel(); } catch (ObjectDisposedException) { }
         }
+    }
+
+    private sealed class NoInhibition : IAsyncDisposable
+    {
+        public static NoInhibition Instance { get; } = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class ReceptionException(string message, Exception? inner = null) : IOException(message, inner);

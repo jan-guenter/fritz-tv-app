@@ -249,8 +249,8 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
 
     private async Task ReadScanAsync(ChannelLease lease, PsiSectionAssembler assembler, EitCoverageTracker coverage, CancellationToken cancellationToken)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60), clock);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         var started = clock.GetTimestamp();
         try
         {
