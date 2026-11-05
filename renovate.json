@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "timezone": "Europe/Berlin",
+  "schedule": ["before 7am on monday"],
+  "labels": ["dependencies"],
+  "automerge": false,
+  "packageRules": [
+    {
+      "matchPackageNames": ["Avalonia", "Avalonia.*"],
+      "groupName": "Avalonia"
+    },
+    {
+      "matchPackageNames": ["Microsoft.Extensions.*", "Microsoft.Data.Sqlite", "System.Text.Encoding.CodePages"],
+      "groupName": ".NET platform libraries"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    }
+  ]
+}

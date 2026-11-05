@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FritzTV.Core/FritzTV.Core.csproj" />
+    <Project Path="src/FritzTV.Infrastructure/FritzTV.Infrastructure.csproj" />
+    <Project Path="src/FritzTV.Desktop/FritzTV.Desktop.csproj" />
+    <Project Path="src/FritzTV.Probe/FritzTV.Probe.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FritzTV.Core.Tests/FritzTV.Core.Tests.csproj" />
+    <Project Path="tests/FritzTV.Infrastructure.Tests/FritzTV.Infrastructure.Tests.csproj" />
+    <Project Path="tests/FritzTV.Desktop.Tests/FritzTV.Desktop.Tests.csproj" />
+  </Folder>
+</Solution>

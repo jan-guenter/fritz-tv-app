@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages*.lock.json'
+      - name: Restore locked dependencies
+        run: dotnet restore --locked-mode
+      - name: Build with analyzers
+        run: dotnet build --no-restore -c Release
+      - name: Unit and headless UI tests
+        run: dotnet test --no-build -c Release --report-trx --results-directory artifacts/test-results
+      - name: Verify formatting
+        run: dotnet format --verify-no-changes --no-restore
+      - name: Host networking planner tests
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests/dev -v
+      - name: Parse Windows bootstrap script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/dev/Initialize-WindowsVm.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { $parseErrors | Format-List | Out-String | Write-Error }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: artifacts/test-results
+          if-no-files-found: ignore
+
+  workflows:
+    name: Workflow and packaging lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install verified actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location "$base/$archive" --output "/tmp/$archive"
+          curl --fail --silent --show-error --location "$base/actionlint_${ACTIONLINT_VERSION}_checksums.txt" --output /tmp/actionlint-checksums.txt
+          (cd /tmp && sha256sum --check --ignore-missing actionlint-checksums.txt)
+          tar -xzf "/tmp/$archive" -C /tmp actionlint
+      - name: Validate workflows
+        run: /tmp/actionlint -color
+      - name: Validate packaging shell
+        run: |
+          bash -n packaging/build-deb.sh
+          shellcheck packaging/build-deb.sh

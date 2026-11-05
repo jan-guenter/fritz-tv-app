@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <data name="AppSubtitle" xml:space="preserve"><value>Fernsehen und Radio</value></data>
+  <data name="Ready" xml:space="preserve"><value>Bereit. Gerät hinzufügen oder im Netzwerk suchen.</value></data>
+  <data name="Import" xml:space="preserve"><value>Hinzufügen / aktualisieren</value></data>
+  <data name="Discover" xml:space="preserve"><value>Suchen</value></data>
+  <data name="DiscoveredDevices" xml:space="preserve"><value>Gefundene Geräte</value></data>
+  <data name="Search" xml:space="preserve"><value>Sender suchen</value></data>
+  <data name="AllChannels" xml:space="preserve"><value>Alle Sender</value></data>
+  <data name="Television" xml:space="preserve"><value>Fernsehen</value></data>
+  <data name="Radio" xml:space="preserve"><value>Radio</value></data>
+  <data name="Play" xml:space="preserve"><value>Wiedergabe</value></data>
+  <data name="Pause" xml:space="preserve"><value>Pause / fortsetzen</value></data>
+  <data name="Stop" xml:space="preserve"><value>Stopp</value></data>
+  <data name="Fullscreen" xml:space="preserve"><value>Vollbild</value></data>
+  <data name="AudioTrack" xml:space="preserve"><value>Tonspur</value></data>
+  <data name="Subtitles" xml:space="preserve"><value>Untertitel</value></data>
+  <data name="Teletext" xml:space="preserve"><value>Videotext</value></data>
+  <data name="Open" xml:space="preserve"><value>Öffnen</value></data>
+  <data name="Index" xml:space="preserve"><value>Startseite</value></data>
+  <data name="Transparency" xml:space="preserve"><value>Transparenz</value></data>
+  <data name="Quit" xml:space="preserve"><value>Beenden</value></data>
+  <data name="SelectChannel" xml:space="preserve"><value>Sender auswählen, um die Wiedergabe zu starten.</value></data>
+  <data name="InvalidDescriptor" xml:space="preserve"><value>Eine gültige HTTP- oder HTTPS-Gerätebeschreibungs-URL eingeben.</value></data>
+  <data name="Loading" xml:space="preserve"><value>Gerät und Senderlisten werden geladen…</value></data>
+  <data name="Imported" xml:space="preserve"><value>{0}: {1} Sender, {2} Tuner.</value></data>
+  <data name="ImportFailed" xml:space="preserve"><value>Gerät konnte nicht geladen werden.</value></data>
+  <data name="Discovering" xml:space="preserve"><value>SAT&gt;IP-Geräte werden gesucht…</value></data>
+  <data name="Discovered" xml:space="preserve"><value>{0} Geräte gefunden. Manuelle URLs funktionieren auch über ein geroutetes VPN.</value></data>
+  <data name="DiscoveryFailed" xml:space="preserve"><value>Gerätesuche fehlgeschlagen.</value></data>
+  <data name="Playing" xml:space="preserve"><value>Wiedergabe: {0}</value></data>
+  <data name="PlaybackFailed" xml:space="preserve"><value>Wiedergabe fehlgeschlagen. Empfang und Medienbibliotheken prüfen.</value></data>
+  <data name="InvalidTeletext" xml:space="preserve"><value>Eine Videotextseite von 100 bis 899 eingeben.</value></data>
+  <data name="Settings" xml:space="preserve"><value>Einstellungen</value></data>
+  <data name="RecordingFolder" xml:space="preserve"><value>Aufnahmeordner</value></data>
+  <data name="BufferFolder" xml:space="preserve"><value>Timeshift-Ordner</value></data>
+  <data name="BufferLimits" xml:space="preserve"><value>Timeshift-Grenzen</value></data>
+  <data name="StartAtLogin" xml:space="preserve"><value>Bei Anmeldung starten</value></data>
+  <data name="SaveSettings" xml:space="preserve"><value>Einstellungen speichern</value></data>
+  <data name="SettingsSaved" xml:space="preserve"><value>Einstellungen gespeichert.</value></data>
+  <data name="SettingsFailed" xml:space="preserve"><value>Einstellungen konnten nicht gespeichert werden.</value></data>
+  <data name="InvalidSettings" xml:space="preserve"><value>Absolute Ordner und positive Timeshift-Grenzen verwenden.</value></data>
+  <data name="InitializationFailed" xml:space="preserve"><value>Gespeicherte Anwendungsdaten konnten nicht geladen werden.</value></data>
+  <data name="FavoritesOnly" xml:space="preserve"><value>Favoriten</value></data>
+  <data name="Favorite" xml:space="preserve"><value>Favorit umschalten</value></data>
+  <data name="RedTeletextKey" xml:space="preserve"><value>Rote Videotexttaste</value></data>
+  <data name="GreenTeletextKey" xml:space="preserve"><value>Grüne Videotexttaste</value></data>
+  <data name="YellowTeletextKey" xml:space="preserve"><value>Gelbe Videotexttaste</value></data>
+  <data name="BlueTeletextKey" xml:space="preserve"><value>Blaue Videotexttaste</value></data>
+</root>

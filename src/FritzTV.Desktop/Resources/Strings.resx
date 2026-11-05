@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <data name="AppSubtitle" xml:space="preserve"><value>Television and radio</value></data>
+  <data name="Ready" xml:space="preserve"><value>Ready. Add a device or discover your network.</value></data>
+  <data name="Import" xml:space="preserve"><value>Add / refresh</value></data>
+  <data name="Discover" xml:space="preserve"><value>Discover</value></data>
+  <data name="DiscoveredDevices" xml:space="preserve"><value>Discovered devices</value></data>
+  <data name="Search" xml:space="preserve"><value>Search channels</value></data>
+  <data name="AllChannels" xml:space="preserve"><value>All channels</value></data>
+  <data name="Television" xml:space="preserve"><value>Television</value></data>
+  <data name="Radio" xml:space="preserve"><value>Radio</value></data>
+  <data name="Play" xml:space="preserve"><value>Play</value></data>
+  <data name="Pause" xml:space="preserve"><value>Pause / resume</value></data>
+  <data name="Stop" xml:space="preserve"><value>Stop</value></data>
+  <data name="Fullscreen" xml:space="preserve"><value>Fullscreen</value></data>
+  <data name="AudioTrack" xml:space="preserve"><value>Audio track</value></data>
+  <data name="Subtitles" xml:space="preserve"><value>Subtitles</value></data>
+  <data name="Teletext" xml:space="preserve"><value>Teletext</value></data>
+  <data name="Open" xml:space="preserve"><value>Open</value></data>
+  <data name="Index" xml:space="preserve"><value>Index</value></data>
+  <data name="Transparency" xml:space="preserve"><value>Transparency</value></data>
+  <data name="Quit" xml:space="preserve"><value>Quit</value></data>
+  <data name="SelectChannel" xml:space="preserve"><value>Select a channel to start watching or listening.</value></data>
+  <data name="InvalidDescriptor" xml:space="preserve"><value>Enter a valid HTTP or HTTPS device descriptor URL.</value></data>
+  <data name="Loading" xml:space="preserve"><value>Loading device and channel lists…</value></data>
+  <data name="Imported" xml:space="preserve"><value>{0}: {1} channels, {2} tuners.</value></data>
+  <data name="ImportFailed" xml:space="preserve"><value>Could not load the device.</value></data>
+  <data name="Discovering" xml:space="preserve"><value>Searching for SAT&gt;IP devices…</value></data>
+  <data name="Discovered" xml:space="preserve"><value>{0} devices discovered. Manual URLs also work over a routed VPN.</value></data>
+  <data name="DiscoveryFailed" xml:space="preserve"><value>Device discovery failed.</value></data>
+  <data name="Playing" xml:space="preserve"><value>Playing {0}</value></data>
+  <data name="PlaybackFailed" xml:space="preserve"><value>Playback failed. Check reception and media dependencies.</value></data>
+  <data name="InvalidTeletext" xml:space="preserve"><value>Enter a teletext page from 100 to 899.</value></data>
+  <data name="Settings" xml:space="preserve"><value>Settings</value></data>
+  <data name="RecordingFolder" xml:space="preserve"><value>Recording folder</value></data>
+  <data name="BufferFolder" xml:space="preserve"><value>Timeshift folder</value></data>
+  <data name="BufferLimits" xml:space="preserve"><value>Timeshift limits</value></data>
+  <data name="StartAtLogin" xml:space="preserve"><value>Start at login</value></data>
+  <data name="SaveSettings" xml:space="preserve"><value>Save settings</value></data>
+  <data name="SettingsSaved" xml:space="preserve"><value>Settings saved.</value></data>
+  <data name="SettingsFailed" xml:space="preserve"><value>Could not save settings.</value></data>
+  <data name="InvalidSettings" xml:space="preserve"><value>Use absolute folders and positive timeshift limits.</value></data>
+  <data name="InitializationFailed" xml:space="preserve"><value>Could not initialize saved application data.</value></data>
+  <data name="FavoritesOnly" xml:space="preserve"><value>Favorites</value></data>
+  <data name="Favorite" xml:space="preserve"><value>Toggle favorite</value></data>
+  <data name="RedTeletextKey" xml:space="preserve"><value>Red teletext key</value></data>
+  <data name="GreenTeletextKey" xml:space="preserve"><value>Green teletext key</value></data>
+  <data name="YellowTeletextKey" xml:space="preserve"><value>Yellow teletext key</value></data>
+  <data name="BlueTeletextKey" xml:space="preserve"><value>Blue teletext key</value></data>
+</root>

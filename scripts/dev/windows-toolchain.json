@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "verifiedOn": "2026-11-05",
+  "packages": [
+    { "id": "Microsoft.PowerShell", "version": "7.6.9.0" },
+    { "id": "Git.Git", "version": "2.56.0.4" },
+    { "id": "Microsoft.DotNet.SDK.10", "version": "10.0.403" },
+    { "id": "astral-sh.uv", "version": "0.13.7" },
+    { "id": "MoritzBunkus.MKVToolNix", "version": "103.0.0" },
+    { "id": "Gyan.FFmpeg", "version": "9.0.2" },
+    { "id": "Microsoft.VCRedist.2015+.x64", "version": "14.51.36247.0" },
+    { "id": "JRSoftware.InnoSetup", "version": "6.7.3" }
+  ],
+  "pythonVersion": "3.14.10",
+  "windowsMcpVersion": "0.8.8",
+  "runner": {
+    "version": "2.338.2",
+    "url": "https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-win-x64-2.338.2.zip",
+    "sha256": "a1f17aa987fc8158bc7521d284912267a0d01b7c2c4684b33c86783b5e8221cc"
+  }
+}

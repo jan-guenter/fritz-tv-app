@@ -1,0 +1,103 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:FritzTV.Desktop.ViewModels"
+        xmlns:models="using:FritzTV.Core.Models"
+        xmlns:services="using:FritzTV.Desktop.Services"
+        x:Class="FritzTV.Desktop.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="FRITZ TV" Width="1240" Height="820" MinWidth="900" MinHeight="650"
+        AutomationProperties.AutomationId="MainWindow">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="22" RowSpacing="16">
+    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+      <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+        <TextBlock Text="FRITZ TV" FontSize="25" FontWeight="Bold" />
+        <TextBlock Text="{Binding Text[AppSubtitle]}" Opacity="0.6" FontSize="12" />
+      </StackPanel>
+      <TextBox Grid.Column="1" Text="{Binding DescriptorUrl}" VerticalContentAlignment="Center"
+               PlaceholderText="http://fritz.box:49000/satipdesc.xml" AutomationProperties.AutomationId="DescriptorUrl" />
+      <Button Grid.Column="2" Content="{Binding Text[Import]}" Command="{Binding ImportCommand}" AutomationProperties.AutomationId="ImportDevice" />
+      <Button Grid.Column="3" Content="{Binding Text[Discover]}" Command="{Binding DiscoverCommand}" AutomationProperties.AutomationId="DiscoverDevices" />
+    </Grid>
+    <Grid Grid.Row="1" ColumnDefinitions="290,*" ColumnSpacing="18">
+      <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="12" Padding="12">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
+          <ComboBox ItemsSource="{Binding DiscoveredDevices}" SelectedItem="{Binding SelectedDevice}" HorizontalAlignment="Stretch"
+                    PlaceholderText="{Binding Text[DiscoveredDevices]}" AutomationProperties.AutomationId="DiscoveredDeviceList" />
+          <TextBox Grid.Row="1" Text="{Binding SearchText}" PlaceholderText="{Binding Text[Search]}" AutomationProperties.AutomationId="ChannelSearch" />
+          <ComboBox Grid.Row="2" ItemsSource="{Binding ChannelFilters}" SelectedIndex="{Binding ChannelFilter}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="ChannelKindFilter" />
+          <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+            <CheckBox Content="{Binding Text[FavoritesOnly]}" IsChecked="{Binding FavoritesOnly}" AutomationProperties.AutomationId="FavoritesOnly" />
+            <Button Content="★" Command="{Binding ToggleFavoriteCommand}" AutomationProperties.Name="{Binding Text[Favorite]}" AutomationProperties.AutomationId="ToggleFavorite" />
+          </StackPanel>
+          <ListBox Grid.Row="4" ItemsSource="{Binding Channels}" SelectedItem="{Binding SelectedChannel}" Background="Transparent" AutomationProperties.AutomationId="Channels">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="models:TvChannel">
+                <TextBlock Text="{Binding Name}" Margin="4,8" TextTrimming="CharacterEllipsis" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+      <Grid Grid.Column="1" RowDefinitions="*,Auto,Auto,Auto,Auto" RowSpacing="12">
+        <Border Background="#10151D" CornerRadius="12" ClipToBounds="True">
+          <ContentControl x:Name="VideoHost" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" AutomationProperties.AutomationId="VideoSurface">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+              <TextBlock Text="FRITZ TV" Foreground="White" FontSize="40" FontWeight="Light" HorizontalAlignment="Center" />
+              <TextBlock Text="{Binding Text[SelectChannel]}" Foreground="#A8B4C5" />
+            </StackPanel>
+          </ContentControl>
+        </Border>
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+          <Button Content="{Binding Text[Play]}" Command="{Binding PlayCommand}" AutomationProperties.AutomationId="Play" />
+          <Button Grid.Column="1" Content="{Binding Text[Pause]}" Command="{Binding PauseCommand}" AutomationProperties.AutomationId="Pause" />
+          <Button Grid.Column="2" Content="{Binding Text[Stop]}" Command="{Binding StopCommand}" AutomationProperties.AutomationId="Stop" />
+          <Slider Grid.Column="3" Minimum="0" Maximum="100" Value="{Binding Volume}" Margin="16,0" AutomationProperties.AutomationId="Volume" />
+          <Button Grid.Column="4" Content="{Binding Text[Fullscreen]}" Click="OnFullscreenClick" AutomationProperties.AutomationId="Fullscreen" />
+        </Grid>
+        <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="12">
+          <ComboBox ItemsSource="{Binding AudioTracks}" SelectedItem="{Binding SelectedAudioTrack}" HorizontalAlignment="Stretch"
+                    PlaceholderText="{Binding Text[AudioTrack]}" AutomationProperties.AutomationId="AudioTracks">
+            <ComboBox.ItemTemplate><DataTemplate x:DataType="services:PlaybackTrack"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+          </ComboBox>
+          <ComboBox Grid.Column="1" ItemsSource="{Binding SubtitleTracks}" SelectedItem="{Binding SelectedSubtitleTrack}" HorizontalAlignment="Stretch"
+                    PlaceholderText="{Binding Text[Subtitles]}" AutomationProperties.AutomationId="SubtitleTracks">
+            <ComboBox.ItemTemplate><DataTemplate x:DataType="services:PlaybackTrack"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+          </ComboBox>
+        </Grid>
+        <WrapPanel Grid.Row="3" Orientation="Horizontal">
+          <TextBlock Text="{Binding Text[Teletext]}" VerticalAlignment="Center" Margin="0,0,8,0" />
+          <TextBox Text="{Binding TeletextPage}" Width="65" MaxLength="3" AutomationProperties.AutomationId="TeletextPage" />
+          <Button Content="{Binding Text[Open]}" Command="{Binding ShowTeletextCommand}" Margin="6,0" AutomationProperties.AutomationId="TeletextOpen" />
+          <Button Content="{Binding Text[Index]}" Command="{Binding NavigateTeletextCommand}" CommandParameter="Index" Margin="0,0,6,0" />
+          <Button Background="#B72635" Content="●" Command="{Binding NavigateTeletextCommand}" CommandParameter="Red" AutomationProperties.Name="{Binding Text[RedTeletextKey]}" />
+          <Button Background="#237346" Content="●" Command="{Binding NavigateTeletextCommand}" CommandParameter="Green" AutomationProperties.Name="{Binding Text[GreenTeletextKey]}" />
+          <Button Background="#A87916" Content="●" Command="{Binding NavigateTeletextCommand}" CommandParameter="Yellow" AutomationProperties.Name="{Binding Text[YellowTeletextKey]}" />
+          <Button Background="#245FA3" Content="●" Command="{Binding NavigateTeletextCommand}" CommandParameter="Blue" AutomationProperties.Name="{Binding Text[BlueTeletextKey]}" />
+          <Button Content="{Binding Text[Transparency]}" Command="{Binding ToggleTeletextTransparencyCommand}" Margin="6,0" />
+        </WrapPanel>
+        <Expander Grid.Row="4" Header="{Binding Text[Settings]}" HorizontalAlignment="Stretch">
+          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
+            <TextBlock Text="{Binding Text[RecordingFolder]}" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Text="{Binding RecordingDirectory}" AutomationProperties.AutomationId="RecordingDirectory" />
+            <TextBlock Grid.Row="1" Text="{Binding Text[BufferFolder]}" VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding BufferDirectory}" AutomationProperties.AutomationId="BufferDirectory" />
+            <TextBlock Grid.Row="2" Text="{Binding Text[BufferLimits]}" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="10">
+              <NumericUpDown Value="{Binding TimeshiftMinutes}" Minimum="1" Width="100" AutomationProperties.AutomationId="TimeshiftMinutes" />
+              <TextBlock Text="min" VerticalAlignment="Center" />
+              <NumericUpDown Value="{Binding TimeshiftGiB}" Minimum="1" Width="100" AutomationProperties.AutomationId="TimeshiftGiB" />
+              <TextBlock Text="GiB" VerticalAlignment="Center" />
+            </StackPanel>
+            <CheckBox Grid.Row="3" Content="{Binding Text[StartAtLogin]}" IsChecked="{Binding StartAtLogin}" AutomationProperties.AutomationId="StartAtLogin" />
+            <Button Grid.Row="3" Grid.Column="1" Content="{Binding Text[SaveSettings]}" Command="{Binding SaveSettingsCommand}" HorizontalAlignment="Right" AutomationProperties.AutomationId="SaveSettings" />
+          </Grid>
+        </Expander>
+      </Grid>
+    </Grid>
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+      <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.AutomationId="Status" />
+      <ToggleSwitch Grid.Column="1" IsChecked="{Binding German}" OnContent="Deutsch" OffContent="English" AutomationProperties.AutomationId="Language" />
+      <Button Grid.Column="2" Content="{Binding Text[Quit]}" Click="OnQuitClick" AutomationProperties.AutomationId="Quit" />
+    </Grid>
+  </Grid>
+</Window>
