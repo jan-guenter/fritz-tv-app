@@ -16,7 +16,7 @@ public interface IPlaybackController
 
     Task StopAsync(CancellationToken cancellationToken);
 
-    Task PlayFileAsync(string path, CancellationToken cancellationToken);
+    Task PlayFileAsync(string path, CancellationToken cancellationToken, int? serviceId = null);
 
     Task SeekAsync(DateTimeOffset? position, CancellationToken cancellationToken);
 

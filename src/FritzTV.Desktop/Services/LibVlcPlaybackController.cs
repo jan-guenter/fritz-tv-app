@@ -35,6 +35,10 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     private volatile bool _outputReady;
     private bool _paused;
     private bool _filePlayback;
+    private string? _filePath;
+    private int? _fileServiceId;
+    private bool _pendingFileOpacityChange;
+    private volatile TaskCompletionSource? _nativePlaying;
     private volatile bool _switchingMedia;
     private int _disposed;
 
@@ -95,7 +99,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         }
     }
 
-    public async Task PlayFileAsync(string path, CancellationToken cancellationToken)
+    public async Task PlayFileAsync(string path, CancellationToken cancellationToken, int? serviceId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
@@ -106,7 +110,9 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             _filePlayback = true;
             _warmupMilliseconds = 0;
             _origin = DateTimeOffset.UnixEpoch;
-            _media = new Media(_libVlc!, new Uri(Path.GetFullPath(path)));
+            _filePath = Path.GetFullPath(path);
+            _fileServiceId = serviceId;
+            _media = CreateFileMedia(_filePath);
             await StartNativeMediaAsync().ConfigureAwait(true);
         }
         finally
@@ -167,7 +173,13 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
                 return;
             }
 
-            if (_paused && (snapshot.ResumePointExpired || _pendingBufferedSeek is not null))
+            if (_filePlayback && _paused && _pendingFileOpacityChange)
+            {
+                _paused = false;
+                _pausedAt = null;
+                await RestartFileMediaAsync(snapshot.Position, cancellationToken).ConfigureAwait(true);
+            }
+            else if (_paused && (snapshot.ResumePointExpired || _pendingBufferedSeek is not null))
             {
                 DateTimeOffset target = snapshot.ResumePointExpired ? snapshot.Earliest : _pendingBufferedSeek!.Value;
                 _paused = false;
@@ -232,7 +244,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         if (_mediaPlayer is not null)
         {
             _mediaPlayer.Volume = _outputReady ? _requestedVolume : 0;
-            if (_outputReady && _restoreTeletext && _teletextPage != 0)
+            if (_outputReady && _restoreTeletext && _teletextPage != 0 && _mediaPlayer.State is VLCState.Playing or VLCState.Paused)
             {
                 _restoreTeletext = false;
                 _mediaPlayer.Teletext = _teletextPage;
@@ -299,7 +311,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
         try
         {
-            if (_bufferedPlayback is null || GetSnapshot() is not { } snapshot)
+            if (GetSnapshot() is not { } snapshot)
             {
                 return;
             }
@@ -308,11 +320,61 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             // supported vbi-opaque decoder option requires recreating the decoder.
             _teletextOpaque = !_teletextOpaque;
             _restoreTeletext = _teletextPage != 0;
-            await SeekCoreAsync(snapshot.Position).ConfigureAwait(true);
+            if (_filePlayback)
+            {
+                // Keep a paused file at its exact cursor; apply the decoder option on resume.
+                _pendingFileOpacityChange = _paused;
+                if (!_paused)
+                {
+                    await RestartFileMediaAsync(snapshot.Position, cancellationToken).ConfigureAwait(true);
+                }
+            }
+            else
+            {
+                await SeekCoreAsync(snapshot.Position).ConfigureAwait(true);
+            }
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private Media CreateFileMedia(string path)
+    {
+        var media = new Media(_libVlc!, new Uri(path));
+        media.AddOption(_teletextOpaque ? ":vbi-opaque" : ":no-vbi-opaque");
+        if (_fileServiceId is { } serviceId && string.Equals(Path.GetExtension(path), ".ts", StringComparison.OrdinalIgnoreCase))
+        {
+            media.AddOption(":program=" + serviceId.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return media;
+    }
+
+    private async Task RestartFileMediaAsync(DateTimeOffset position, CancellationToken cancellationToken)
+    {
+        long elapsed = Math.Max(0, (long)(position - DateTimeOffset.UnixEpoch).TotalMilliseconds);
+        long length = Interlocked.Read(ref _lengthMilliseconds);
+        await StopDecoderAsync().ConfigureAwait(true);
+        _media = CreateFileMedia(_filePath!);
+        _pendingFileOpacityChange = false;
+        _restoreTeletext = _teletextPage != 0;
+        _warmupMilliseconds = Math.Max(250, elapsed);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _nativePlaying = started;
+        try
+        {
+            await StartNativeMediaAsync(elapsed, length).ConfigureAwait(true);
+            // A file input must be active before VLC accepts a time seek. Applying
+            // start-time alone can restart transport recordings at their beginning.
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(true);
+            _mediaPlayer!.Time = elapsed;
+            Interlocked.Exchange(ref _elapsedMilliseconds, elapsed);
+        }
+        finally
+        {
+            _nativePlaying = null;
         }
     }
 
@@ -357,6 +419,11 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _mediaPlayer = new MediaPlayer(_libVlc) { EnableKeyInput = false, EnableMouseInput = false };
         _mediaPlayer.ESAdded += (_, _) => TracksChanged?.Invoke(this, EventArgs.Empty);
         _mediaPlayer.ESDeleted += (_, _) => TracksChanged?.Invoke(this, EventArgs.Empty);
+        _mediaPlayer.Playing += (_, _) =>
+        {
+            _nativePlaying?.TrySetResult();
+            NativeOutputChanged?.Invoke(this, EventArgs.Empty);
+        };
         _mediaPlayer.TimeChanged += (_, args) =>
         {
             Interlocked.Exchange(ref _elapsedMilliseconds, args.Time);
@@ -395,10 +462,10 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         await StartNativeMediaAsync().ConfigureAwait(true);
     }
 
-    private async Task StartNativeMediaAsync()
+    private async Task StartNativeMediaAsync(long initialPositionMilliseconds = 0, long initialLengthMilliseconds = 0)
     {
-        Interlocked.Exchange(ref _elapsedMilliseconds, 0);
-        Interlocked.Exchange(ref _lengthMilliseconds, 0);
+        Interlocked.Exchange(ref _elapsedMilliseconds, initialPositionMilliseconds);
+        Interlocked.Exchange(ref _lengthMilliseconds, initialLengthMilliseconds);
         _outputReady = _warmupMilliseconds == 0;
         ApplyOutputState();
         NativeOutputChanged?.Invoke(this, EventArgs.Empty);
@@ -447,6 +514,9 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _restoreTeletext = false;
         _currentChannel = null;
         _filePlayback = false;
+        _filePath = null;
+        _fileServiceId = null;
+        _pendingFileOpacityChange = false;
         _paused = false;
         _pausedAt = null;
         _pendingBufferedSeek = null;

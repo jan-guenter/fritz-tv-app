@@ -107,6 +107,7 @@ public sealed partial class MainWindow : Window
     private void AttachVideo()
     {
         _videoView ??= new VideoView();
+        Avalonia.Automation.AutomationProperties.SetAutomationId(_videoView, "VideoSurface");
         _videoView.MediaPlayer = _player?.NativePlayer;
         VideoHost.Content = _videoView;
         UpdateLayout();

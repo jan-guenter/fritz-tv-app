@@ -38,8 +38,35 @@ internal sealed class NativeDesktopSession : IAsyncDisposable
         }
     }
 
-    public AutomationElement Find(string id) => Window.FindFirstDescendant(condition => condition.ByAutomationId(id))
+    public AutomationElement Find(string id) => TryFind(id)
         ?? throw new InvalidOperationException("UI automation element not found: " + id);
+
+    public AutomationElement? TryFind(string id)
+    {
+        // UIA FindFirst stops at Avalonia's embedded native-video HWND. The control
+        // walker still exposes its siblings, including the same stable identifiers.
+        var walker = automation.TreeWalkerFactory.GetControlViewWalker();
+        var pending = new Queue<AutomationElement>();
+        pending.Enqueue(Window);
+        int examined = 0;
+        while (pending.Count > 0 && examined++ < 2048)
+        {
+            AutomationElement current = pending.Dequeue();
+            if (current.Properties.AutomationId.ValueOrDefault is { } actual && string.Equals(actual, id, StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            AutomationElement? child = walker.GetFirstChild(current);
+            while (child is not null && pending.Count + examined < 2048)
+            {
+                pending.Enqueue(child);
+                child = walker.GetNextSibling(child);
+            }
+        }
+
+        return null;
+    }
 
     public static async Task WaitAsync(Func<bool> condition, TimeSpan timeout, CancellationToken cancellationToken)
     {

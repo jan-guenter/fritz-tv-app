@@ -25,6 +25,10 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public int Volume { get; private set; }
 
+    public string? LastFilePath { get; private set; }
+
+    public int? LastFileServiceId { get; private set; }
+
     public Exception? PlayFailure { get; init; }
 
     public Task PlayAsync(TvChannel channel, CancellationToken cancellationToken) => PlayFailure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
@@ -33,7 +37,12 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public Task TogglePauseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task PlayFileAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task PlayFileAsync(string path, CancellationToken cancellationToken, int? serviceId = null)
+    {
+        LastFilePath = path;
+        LastFileServiceId = serviceId;
+        return Task.CompletedTask;
+    }
 
     public Task SeekAsync(DateTimeOffset? position, CancellationToken cancellationToken) => Task.CompletedTask;
 

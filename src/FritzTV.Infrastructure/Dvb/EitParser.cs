@@ -146,34 +146,44 @@ public static class EitParser
 
     private static string DecodeExtendedText(byte[][] segments)
     {
-        if (segments.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        var firstIndex = Array.FindIndex(segments, segment => segment.Length > 0);
-        if (firstIndex < 0)
-        {
-            return string.Empty;
-        }
-
-        var first = segments[firstIndex];
-        var prefixLength = first.Length == 0 || first[0] >= 0x20 ? 0 : first[0] == 0x10 ? Math.Min(3, first.Length) : 1;
-        var selector = first.AsSpan(0, prefixLength);
+        var result = new StringBuilder();
         using var joined = new MemoryStream();
-        joined.Write(first);
-        foreach (var segment in segments.AsSpan(firstIndex + 1))
+        byte[]? selector = null;
+        foreach (var segment in segments)
         {
-            var text = segment.AsSpan();
-            if (prefixLength > 0 && text.StartsWith(selector))
+            if (segment.Length == 0)
             {
-                text = text[prefixLength..];
+                continue;
             }
 
-            joined.Write(text);
+            var text = segment.AsSpan();
+            var prefixLength = text[0] >= 0x20 ? 0 : text[0] == 0x10 ? Math.Min(3, text.Length) : 1;
+            var prefix = text[..prefixLength];
+            if (selector is not null && !prefix.SequenceEqual(selector))
+            {
+                result.Append(DvbText.Decode(joined.GetBuffer().AsSpan(0, checked((int)joined.Length)), trim: false));
+                joined.SetLength(0);
+                selector = null;
+            }
+
+            if (selector is null)
+            {
+                selector = prefix.ToArray();
+                joined.Write(text);
+            }
+            else
+            {
+                // Compatible fragments may split a multibyte character across descriptor fields.
+                joined.Write(text[prefixLength..]);
+            }
         }
 
-        return DvbText.Decode(joined.GetBuffer().AsSpan(0, checked((int)joined.Length)));
+        if (joined.Length > 0)
+        {
+            result.Append(DvbText.Decode(joined.GetBuffer().AsSpan(0, checked((int)joined.Length)), trim: false));
+        }
+
+        return result.ToString().Trim();
     }
 
     private static string? ReadExtendedItems(ReadOnlySpan<byte> items)

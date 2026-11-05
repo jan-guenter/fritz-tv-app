@@ -9,6 +9,43 @@ namespace FritzTV.Infrastructure.Tests;
 public sealed class PersistenceTests
 {
     [Fact]
+    public async Task InvalidDefinitionRowsAreDiagnosedAndPreservedWithoutHidingHealthyDefinitions()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "fritztv-definition-isolation-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var path = Path.Combine(directory, "app.db");
+        try
+        {
+            var repository = new AppRepository(path);
+            await repository.InitializeAsync(cancellationToken);
+            var start = new DateTimeOffset(2026, 11, 5, 20, 0, 0, TimeSpan.Zero);
+            var healthy = new RecordingDefinition(Guid.NewGuid(), "channel", "Healthy", start, start.AddHours(1), "Europe/Berlin");
+            await repository.SaveDefinitionAsync(healthy, cancellationToken);
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+            await connection.OpenAsync(cancellationToken);
+            using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO definitions(id,payload) VALUES('invalid-json','{'),('null-definition','null'),('wrong-identity',$payload);";
+            command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(healthy));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            var snapshot = await repository.GetDefinitionSnapshotAsync(cancellationToken);
+            Assert.Equal(healthy, Assert.Single(snapshot.Definitions));
+            Assert.Equal(3, snapshot.Failures.Count);
+            Assert.All(snapshot.Failures, failure => Assert.False(string.IsNullOrWhiteSpace(failure.Message)));
+            Assert.Equal(healthy, Assert.Single(await repository.GetDefinitionsAsync(cancellationToken)));
+            command.CommandText = "SELECT count(*) FROM definitions;";
+            Assert.Equal(4L, await command.ExecuteScalarAsync(cancellationToken));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task RefreshPreservesFavouritesAndGuideUpdatesReplaceEvent()
     {
         var directory = Path.Combine(Path.GetTempPath(), "fritztv-tests-" + Guid.NewGuid().ToString("N"));

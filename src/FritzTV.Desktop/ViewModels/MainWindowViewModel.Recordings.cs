@@ -244,7 +244,12 @@ public sealed partial class MainWindowViewModel
         }
 
         DetailsExpanded = false;
-        await RunRecordingActionAsync(() => _playback.PlayFileAsync(path, cancellationToken), cancellationToken).ConfigureAwait(true);
+        await RunRecordingActionAsync(async () =>
+        {
+            TvChannel? channel = _data is not null && selected is not null
+                ? await _data.GetChannelAsync(selected.ChannelId, cancellationToken).ConfigureAwait(true) : null;
+            await _playback.PlayFileAsync(path, cancellationToken, channel?.ServiceId ?? channel?.ServiceIdentity?.ServiceId).ConfigureAwait(true);
+        }, cancellationToken).ConfigureAwait(true);
     }
 
     [RelayCommand]

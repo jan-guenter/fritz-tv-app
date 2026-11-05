@@ -8,6 +8,7 @@ using FritzTV.Infrastructure.Power;
 using FritzTV.Infrastructure.Recording;
 using FritzTV.Infrastructure.Transport;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 
 namespace FritzTV.Infrastructure.Tests;
 
@@ -21,7 +22,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
     public AppRepository Repository { get; }
 
-    public TestInputFactory Inputs { get; } = new();
+    public TestInputFactory Inputs { get; }
 
     public TestFinalizer Finalizer { get; } = new();
 
@@ -29,10 +30,11 @@ internal sealed class RecordingTestScope : IAsyncDisposable
 
     public RecordingCoordinator Coordinator { get; }
 
-    public RecordingTestScope()
+    public RecordingTestScope(ILogger<RecordingCoordinator>? logger = null)
     {
+        Inputs = new TestInputFactory(Clock);
         Repository = new AppRepository(Path.Combine(DirectoryPath, "app.db"));
-        Coordinator = new RecordingCoordinator(Repository, sessions, Clock, Inputs, Finalizer, Power);
+        Coordinator = new RecordingCoordinator(Repository, sessions, Clock, Inputs, Finalizer, Power, logger);
     }
 
     public async Task<TvChannel> InitializeAsync(CancellationToken cancellationToken)
@@ -55,12 +57,16 @@ internal sealed class RecordingTestScope : IAsyncDisposable
         }
     }
 
-    internal sealed class TestInputFactory : IRecordingInputFactory
+    internal sealed class TestInputFactory(ManualTimeProvider clock) : IRecordingInputFactory
     {
         private int active;
         private int opened;
 
         public int FailingInputs { get; set; }
+
+        public string FailureMessage { get; set; } = "Synthetic transport interruption.";
+
+        public TimeSpan HealthyInterval { get; set; }
 
         public bool FailPriorityLease { get; set; }
 
@@ -89,7 +95,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
             }
 
             var index = Interlocked.Increment(ref opened);
-            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs, FailPriorityLease, FailBeforeWriting);
+            var input = new TestInput(() => Interlocked.Decrement(ref active), index <= FailingInputs, FailPriorityLease, FailBeforeWriting, () => clock.Advance(HealthyInterval), FailureMessage);
             Latest[channel.Id] = input;
             if (index > FailingInputs)
             {
@@ -105,7 +111,7 @@ internal sealed class RecordingTestScope : IAsyncDisposable
         }
     }
 
-    internal sealed class TestInput(Action release, bool failAfterWrite = false, bool failPriorityLease = false, bool failBeforeWriting = false) : IRecordingInput
+    internal sealed class TestInput(Action release, bool failAfterWrite = false, bool failPriorityLease = false, bool failBeforeWriting = false, Action? healthyProgress = null, string failureMessage = "Synthetic transport interruption.") : IRecordingInput
     {
         private int disposed;
 
@@ -136,13 +142,15 @@ internal sealed class RecordingTestScope : IAsyncDisposable
             Written.TrySetResult();
             if (failAfterWrite)
             {
+                healthyProgress?.Invoke();
+                yield return data;
                 if (failPriorityLease)
                 {
                     using var backlog = new MemoryStream(data);
                     _ = await RecordingPriorityReader.ReadAsync(backlog, new byte[188], Task.FromException(new IOException("Synthetic recording-priority lease failure.")), cancellationToken).ConfigureAwait(false);
                 }
 
-                throw new IOException("Synthetic transport interruption.");
+                throw new IOException(failureMessage);
             }
 
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);

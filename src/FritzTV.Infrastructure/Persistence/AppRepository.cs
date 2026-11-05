@@ -353,7 +353,38 @@ public sealed class AppRepository(string databasePath)
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<IReadOnlyList<RecordingDefinition>> GetDefinitionsAsync(CancellationToken cancellationToken = default) => ReadAllAsync<RecordingDefinition>("definitions", cancellationToken);
+    public async Task<IReadOnlyList<RecordingDefinition>> GetDefinitionsAsync(CancellationToken cancellationToken = default) => (await GetDefinitionSnapshotAsync(cancellationToken).ConfigureAwait(false)).Definitions;
+
+    public async Task<RecordingDefinitionSnapshot> GetDefinitionSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id,payload FROM definitions ORDER BY rowid;";
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var definitions = new List<RecordingDefinition>();
+        var failures = new List<StoredDefinitionFailure>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var id = reader.GetString(0);
+            try
+            {
+                var definition = JsonSerializer.Deserialize<RecordingDefinition>(reader.GetString(1), JsonOptions)
+                    ?? throw new InvalidDataException("The stored recording definition is null.");
+                if (!string.Equals(definition.Id.ToString("D", CultureInfo.InvariantCulture), id, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("The stored recording definition has a mismatched identity.");
+                }
+
+                definitions.Add(definition);
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidDataException)
+            {
+                failures.Add(new StoredDefinitionFailure(id, exception.Message));
+            }
+        }
+
+        return new RecordingDefinitionSnapshot(definitions.AsReadOnly(), failures.AsReadOnly());
+    }
 
     public async Task SaveRecordingAsync(RecordingInstance recording, CancellationToken cancellationToken = default)
     {

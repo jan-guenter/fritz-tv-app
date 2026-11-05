@@ -12,7 +12,9 @@ public static class DvbText
         Iso6937 = Encoding.GetEncoding(20269);
     }
 
-    public static string Decode(ReadOnlySpan<byte> data)
+    public static string Decode(ReadOnlySpan<byte> data) => Decode(data, trim: true);
+
+    internal static string Decode(ReadOnlySpan<byte> data, bool trim)
     {
         if (data.IsEmpty)
         {
@@ -21,7 +23,7 @@ public static class DvbText
 
         if (data[0] >= 0x20)
         {
-            return DecodeIso6937(data);
+            return DecodeIso6937(data, trim);
         }
 
         var prefix = 1;
@@ -59,10 +61,10 @@ public static class DvbText
             return "\uFFFD";
         }
 
-        return Clean(encoding.GetString(data[prefix..]));
+        return Clean(encoding.GetString(data[prefix..]), trim);
     }
 
-    private static string DecodeIso6937(ReadOnlySpan<byte> data)
+    private static string DecodeIso6937(ReadOnlySpan<byte> data, bool trim)
     {
         var output = new StringBuilder();
         for (var index = 0; index < data.Length; index++)
@@ -103,8 +105,12 @@ public static class DvbText
             }
         }
 
-        return Clean(output.ToString().Normalize(NormalizationForm.FormC));
+        return Clean(output.ToString().Normalize(NormalizationForm.FormC), trim);
     }
 
-    private static string Clean(string value) => string.Concat(value.Select(character => character == '\u008a' ? '\n' : character).Where(character => !char.IsControl(character) || character == '\n')).Trim();
+    private static string Clean(string value, bool trim)
+    {
+        var cleaned = string.Concat(value.Select(character => character == '\u008a' ? '\n' : character).Where(character => !char.IsControl(character) || character == '\n'));
+        return trim ? cleaned.Trim() : cleaned;
+    }
 }

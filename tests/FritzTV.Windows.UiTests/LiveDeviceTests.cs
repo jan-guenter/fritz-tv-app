@@ -28,7 +28,7 @@ public sealed class LiveDeviceTests
         session.Find("Play").AsButton().Invoke();
         try
         {
-            await NativeDesktopSession.WaitAsync(() => session.Window.FindFirstDescendant(condition => condition.ByAutomationId("Timeline")) is { } timeline && timeline.AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
+            await NativeDesktopSession.WaitAsync(() => session.TryFind("Timeline") is { } timeline && timeline.AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
         }
         catch (TimeoutException)
         {
@@ -45,8 +45,10 @@ public sealed class LiveDeviceTests
         double rewound = session.Find("Timeline").AsSlider().Value;
         await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).ConfigureAwait(true);
         Assert.InRange(session.Find("Timeline").AsSlider().Value, rewound - 0.5, rewound + 0.5);
+        object cover = await WarmupCoverAssertions.VerifyPausedCoverLifecycleAsync(session, TestContext.Current.CancellationToken).ConfigureAwait(true);
         session.Find("Pause").AsButton().Invoke();
         await NativeDesktopSession.WaitAsync(() => session.Find("Timeline").AsSlider().Value > rewound + 0.5, TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        await WarmupCoverAssertions.AssertHiddenAsync(session, cover, TestContext.Current.CancellationToken).ConfigureAwait(true);
         session.Find("GoLive").AsButton().Invoke();
         await VerifyIndependentRecordingAsync(session, TestContext.Current.CancellationToken).ConfigureAwait(true);
     }

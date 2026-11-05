@@ -48,6 +48,18 @@ public sealed class DvbTests
         Assert.EndsWith("Grüsse", programme.Description, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExtendedTextRespectsCharacterSelectorChangesAndBoundaryWhitespace(bool defaultSecondSelector)
+    {
+        byte[] first = [0x15, .. Encoding.UTF8.GetBytes("Grüße ")];
+        byte[] second = defaultSecondSelector ? [(byte)'C', (byte)'a', (byte)'f', 0xc2, (byte)'e'] : [0x10, 0, 1, (byte)'C', (byte)'a', (byte)'f', 0xe9];
+        var programme = Assert.Single(EitParser.Parse(Guid.NewGuid(), DvbFixtures.EitWithDescriptors(ExtendedText(1, second), ExtendedText(0, first))));
+        Assert.EndsWith("Grüße Café", programme.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("\uFFFD", programme.Description, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void EitRejectsCorruptionTruncationAndFutureVersion()
     {

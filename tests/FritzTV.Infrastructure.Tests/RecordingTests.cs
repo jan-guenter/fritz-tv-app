@@ -244,6 +244,7 @@ public sealed class RecordingTests
         await using var scope = new RecordingTestScope();
         var channel = await scope.InitializeAsync(cancellationToken);
         scope.Inputs.FailingInputs = 4;
+        scope.Inputs.HealthyInterval = TimeSpan.FromSeconds(31);
         var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
         await scope.Inputs.HealthyOpened.Task.WaitAsync(TimeSpan.FromSeconds(12), cancellationToken);
         await scope.Inputs.Latest[channel.Id].Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);

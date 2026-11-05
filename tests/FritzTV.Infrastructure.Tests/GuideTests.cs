@@ -136,6 +136,60 @@ public sealed class GuideTests
             await service.RefreshAsync(cancellationToken);
             Assert.False(service.Status.IsScanning);
             Assert.NotNull(service.Status.LastError);
+            Assert.Equal(1, service.Status.TotalFrequencies);
+            Assert.Equal(1, service.Status.CompletedFrequencies);
+            Assert.NotNull(service.Status.LastRefreshUtc);
+            Assert.Empty(sessions.GetUsageSnapshot());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BlockedScanUsesInjectedClockDeadlineAndPreservesCallerCancellation(bool cancelCaller)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "fritztv-guide-deadline-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var clock = new DeadlineTimeProvider();
+        await using var server = new LoopbackRtspServer();
+        try
+        {
+            var repository = new AppRepository(Path.Combine(directory, "app.db"));
+            await repository.InitializeAsync(cancellationToken);
+            var device = new SatIpDevice(Guid.NewGuid(), "uuid:synthetic", "Synthetic", new Uri($"http://127.0.0.1:{server.Port}/device.xml"), null, null, 1);
+            await repository.SaveDeviceAsync(device, cancellationToken);
+            await repository.SaveChannelsAsync([new TvChannel("channel", device.Id, "Synthetic", ChannelKind.Radio, new Uri($"rtsp://127.0.0.1:{server.Port}/?freq=444&pids=0,100"))], cancellationToken);
+            await using var sessions = new SatIpSessionManager(32528, 32655);
+            using var service = new GuideService(repository, sessions, NullLogger<GuideService>.Instance, clock);
+            var refresh = service.RefreshAsync(request.Token);
+            await clock.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            Assert.False(refresh.IsCompleted);
+            if (cancelCaller)
+            {
+                await request.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken));
+                Assert.Null(service.Status.LastRefreshUtc);
+            }
+            else
+            {
+                clock.Advance(TimeSpan.FromSeconds(59));
+                Assert.False(refresh.IsCompleted);
+                clock.Advance(TimeSpan.FromSeconds(1));
+                await refresh.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                Assert.Equal(clock.GetUtcNow(), service.Status.LastRefreshUtc);
+                Assert.Equal(1, service.Status.CompletedFrequencies);
+            }
+
+            Assert.False(service.Status.IsScanning);
             Assert.Empty(sessions.GetUsageSnapshot());
         }
         finally

@@ -1,5 +1,29 @@
 # Verification and packaging
 
+## Recorded acceptance
+
+Results below were measured on 2026-11-05. They identify the tested revision and distinguish application behavior from package/bootstrap checks. Private reports retain UTC timestamps, tool versions and captured diagnostics; broadcaster media/screenshots and machine credentials remain outside Git.
+
+| Revision/check | Measured result |
+|---|---|
+| [`556d878` hosted CI](https://github.com/jan-guenter/fritz-tv-app/actions/runs/41980712825) | Windows/Linux strict builds, analysis, formatting, dependency audit and script/workflow lint passed. Unit/headless suite: 133 total, 130 passed, three native opt-in skips. Both Windows and Linux installer jobs passed. The separate FlaUI project compiled and its three desktop cases correctly skipped on the hosted Windows runner. |
+| Clean `ebccec43b543ee681a986fbc05e2c19b54e97040` Linux GUI | Locked restore and Release Desktop build passed without warnings/errors. From 06:24:31–06:26:21 UTC, whole-display X11/Xvfb captures verified embedded live TV; opaque/transparent teletext page 100; explicit Close; pause while capture continued; paused rewind; resume; Go Live; expanded guide with continuing video and visible Quit. Quit exited 0. SDK 10.0.403 and system LibVLC/plugins `3.0.20-3build6` were recorded. |
+| `3209b173fb3d247591ec9e24638f9a4d163e3e1a` Linux packages | Actual dpkg install 0.1.0, upgrade 0.1.1, removal and purge passed in an isolated user namespace/private root. Both desktop entries and 66 package licence records validated; root ownership and replaced versioned assembly were checked. Host package status seeded dependency data; desktop cache triggers were disabled and no host profile/installation was modified. |
+| `3209b17` Windows installers | Actual silent install 0.1.0, upgrade 0.1.1, reinstall preserving autostart and uninstall passed. Product versions, bundled MKVToolNix 103.0 and 68 licence records were checked. Uninstall removed files, product registration and the app-owned autostart value; the previous autostart value was restored. The package lifecycle test did not launch the application. |
+| Windows VM infrastructure | Pinned tools and native bootstrap verification passed; authenticated interactive MCP and runner tasks worked after reboot. All 32 RTP forwards and TV/radio UDP decode probes passed. Installed admission-guard SHA-256 is `f656f8db976aedaadc3b1f11f6ed50d97bf7251563a0b85dceeb71c3e87b387d`; thirteen allow/deny policy cases passed. |
+
+Native decoder startup/restart can report open-GOP reference or programme-table continuity warnings. The GUI evidence establishes visible decoding and controls, not warning-free native output. Linux native rendering and backend probes are separate results; neither establishes Windows physical GPU or physical-machine power behavior. Final Windows application TV/radio/recording/timer results and review status are maintained in the [implementation plan](../implementation-plan.md#current-execution-evidence). SSDP multicast still requires a reachable LAN.
+
+Protected `main` requires a PR with these exact current checks, resolved conversations, and administrator enforcement; force pushes are disabled:
+
+- `Build and test (ubuntu-24.04)`
+- `Build and test (windows-2025)`
+- `Workflow and packaging lint`
+- `Installer packages / package (ubuntu-24.04)`
+- `Installer packages / package (windows-2025)`
+
+## Build and test commands
+
 The root commands in `AGENTS.md` are the hosted compilation, analyzer, unit/headless and formatting gate. .NET 10 uses Microsoft.Testing.Platform with xUnit v3; native UI tests are a separate Windows-only project so normal headless tests do not need an interactive desktop.
 
 ```text
@@ -49,7 +73,12 @@ For local Windows packaging, with pinned Inno Setup 6.7.3 installed:
 dotnet publish src/FritzTV.Desktop -c Release -r win-x64 --self-contained true --no-restore -p:Version=0.1.0 -o artifacts/publish/win-x64
 ./packaging/Bundle-WindowsDependencies.ps1 -PublishDirectory artifacts/publish/win-x64
 python packaging/collect-licenses.py src/FritzTV.Desktop/obj/project.assets.json artifacts/publish/win-x64/licenses --runtime win-x64
-& "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe" '/DAppVersion=0.1.0' packaging/windows.iss
+$iscc = @(
+  "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+  "$env:LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $iscc) { throw 'Install the pinned Inno Setup compiler first.' }
+& $iscc '/DAppVersion=0.1.0' packaging/windows.iss
 ```
 
 The bundle script verifies the pinned official MKVToolNix ZIP hash, retains its original DLLs/licences and verifies `mkvmerge --version`. The notice collector records restored package versions and attribution, retains original licence/notice files, includes the selected self-contained .NET runtime, and adds SPDX references from NuGet's official licence service. Linux packages depend on the maintained distribution LibVLC/plugins and MKVToolNix 96 or newer; configure the [official MKVToolNix Ubuntu repository](https://mkvtoolnix.download/downloads.html#ubuntu) when the distribution's version is older. Package validation results must be recorded separately from a successful publish/build.

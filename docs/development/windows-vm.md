@@ -2,7 +2,17 @@
 
 This environment provides native Windows compilation, desktop automation, and opt-in FRITZ!Box testing. The application uses native Windows tooling; WSL is not required.
 
-## Verified starting point
+## Current verified status
+
+On 2026-11-05 the pinned toolchain was installed and native Windows PowerShell 5.1 `-VerifyOnly` reported `AllRequiredToolsInstalled=True`. PowerShell 7 is the SSH shell and the timezone is `W. Europe Standard Time`. Authenticated MCP initialize/tool discovery, screenshots, accessibility inspection, application launch, mouse/keyboard input and independent saved-file readback passed. The MCP and repository runner login tasks were observed running in console session 1 after reboot.
+
+All 32 scoped UDP forwards are configured; actual Windows TV/radio RTP reception and FFmpeg decoding passed. The private runner guard matches SHA-256 `f656f8db976aedaadc3b1f11f6ed50d97bf7251563a0b85dceeb71c3e87b387d`, and all thirteen admission-policy cases passed against the installed copy. This establishes the configured runner and policy; a successful trusted-main desktop workflow dispatch is a separate execution check.
+
+The verified rollback checkpoint is the cold snapshot `fritz-tv-toolchain-ready-20261105`, UUID `80a59afa-472b-4b1e-9433-c453588d349c`, taken after the management consistency recovery below. Reapply later bootstrap/guard changes after restoring it. The initially reported pre-bootstrap snapshot was not a valid checkpoint.
+
+[Recorded acceptance](verification.md#recorded-acceptance) distinguishes hosted checks, package lifecycle tests, Linux native rendering and Windows application acceptance. Current final Windows TV/radio/recording/timer results are maintained in the [implementation plan](../implementation-plan.md#current-execution-evidence).
+
+## Initial preflight
 
 Preflight on 2026-11-05 found Windows 11 Pro x64, 8 GiB RAM, 12 logical processors, approximately 225 GiB free, VirtualBox Guest Additions 7.2.6, 3D acceleration, and an active `vboxuser` console session. Key-authenticated SSH works at:
 
@@ -52,7 +62,7 @@ Useful stages:
 .\scripts\dev\Initialize-WindowsVm.ps1 -SkipPackages
 
 # Inventory installed tools and write a report without installing/configuring them.
-.\scripts\dev\Initialize-WindowsVm.ps1 -VerifyOnly
+.\scripts\dev\Initialize-WindowsVm.ps1 -VerifyOnly -WorkspaceRoot C:\src\fritz-tv-app
 ```
 
 Verification reports are written to `%LOCALAPPDATA%\FritzTVDevelopment\verification.json`. Reports include UTC timestamp, tool versions/paths/signatures, timezone, tested commit SHA when the checkout exists, task states, and MCP listeners. Desktop and live-media acceptance remain explicitly false until their separate checks pass. A report generated during installation can legitimately list tools as absent.
@@ -143,7 +153,7 @@ Use GitHub-hosted Windows for clean restore/build/analyzer/headless tests and in
 
 ## Build, test, and recovery
 
-From `C:\src\fritz-tv-app`, once the solution exists:
+From `C:\src\fritz-tv-app`:
 
 ```powershell
 dotnet restore --locked-mode
@@ -152,7 +162,7 @@ dotnet test -c Release --no-build
 dotnet format --verify-no-changes --no-restore
 ```
 
-Run the Windows native-desktop test category only in the interactive session; use the repository's Windows desktop workflow for the concrete test project/filter as it is implemented. Live tests require the explicit descriptor URL and test RTP port range. Neither gate is passed by the bootstrap alone.
+Run the separate `tests/FritzTV.Windows.UiTests` project only in the interactive session; [verification commands](verification.md) show the exact Microsoft.Testing.Platform invocation and environment variables. The trusted-main `Windows desktop acceptance` workflow uses the same project. Live tests require the explicit descriptor URL and reserved RTP range. The bootstrap alone does not establish application-media acceptance.
 
 For recovery, first stop active tests and preserve their reports. Restart the MCP task or managed SSH tunnel independently when one component fails. Inspect `%USERPROFILE%\.windows-mcp\server.log`, task history, the runner `_diag` directory, and the bootstrap verification report. Re-run bootstrap stages after fixing an interrupted package install; no credentials are replaced on a normal rerun. Apply a requested reboot only between test runs, then confirm the console login and check both login tasks.
 
@@ -176,16 +186,19 @@ Oracle documents that the service owns configuration and exits after its last cl
 
 ## Gate evidence
 
-| Gate | Initial evidence/status |
+Measured on 2026-11-05; reports retain UTC timestamps, versions and tested SHAs. These results supplement the historical preflight and incident record rather than treating their initial failures as successful checks.
+
+| Gate | Measured status |
 |---|---|
-| SSH/key access | Passed on 2026-11-05 |
-| Guest Additions/interactive console | Passed preflight |
-| Pre-bootstrap snapshot | Command returned success, but protection is unverified because management and runtime state diverged |
-| Bootstrap syntax/report | Parsed by native Windows PowerShell 5.1 with zero syntax errors; actual staged `-VerifyOnly` succeeded with explicit and default manifest paths (latest check 2026-11-05T01:57:15Z) |
-| Installed toolchain | Installation/verification in progress; use current machine report |
-| Authenticated MCP desktop interaction | Pending actual handshake and smoke test |
-| RTP reception and TV/radio decoding | Pending NAT/firewall configuration and media test |
-| Interactive GitHub runner/native UI tests | Pending registration and workflow execution |
-| Physical GPU/power behavior | Requires physical Windows hardware |
+| SSH and console | Key-authenticated SSH; Guest Additions and unlocked console verified |
+| Rollback protection | Initial reported snapshot rejected; actual runtime disk backed up and genuine cold snapshot `80a59afa-472b-4b1e-9433-c453588d349c` created after recovery |
+| Tool bootstrap | All pinned tools installed; native PowerShell 5.1 parsing and `-VerifyOnly` succeeded; PowerShell 7 SSH shell and Berlin timezone verified |
+| Authenticated MCP | Tool discovery, screenshot, accessibility, launch, click/type/save and independent readback passed; credentials remain outside Git |
+| Windows live reception | TV/radio RTP-carried MPEG-TS and FFmpeg decoding passed with zero detected loss in recorded probes; HTTP/RTSP-only probes were not counted |
+| Interactive runner | Registered `fritz-tv-win11`; interactive login task observed running; installed guard hash above and thirteen policy cases passed |
+| Hosted compilation/tests/packages | CI at `556d878` passed all five protected-main checks; 133 unit/headless cases included 130 passes and three native opt-in skips |
+| Windows installer lifecycle | `3209b17`: install 0.1.0, upgrade 0.1.1, reinstall preserving autostart, and uninstall cleanup passed in a private install directory; package test did not launch the GUI |
+| Native application acceptance | See the revision-specific [implementation evidence](../implementation-plan.md#current-execution-evidence); hosted native UI cases are intentionally skipped |
+| LAN multicast and physical hardware | SSDP requires a reachable LAN; representative GPU decoding and physical sleep behavior require physical Windows hardware |
 
 Official references: [OpenSSH configuration](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-server-configuration), [Windows-MCP](https://github.com/CursorTouch/Windows-MCP), [uv tools](https://docs.astral.sh/uv/guides/tools/), [GitHub self-hosted runners](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners), [FlaUI](https://github.com/FlaUI/FlaUI).

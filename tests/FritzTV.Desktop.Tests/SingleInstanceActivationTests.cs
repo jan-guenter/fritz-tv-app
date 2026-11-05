@@ -41,6 +41,8 @@ public sealed class SingleInstanceActivationTests
         string name = "FritzTV.Test." + Guid.NewGuid().ToString("N");
         await using var primary = await SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken);
         Assert.NotNull(primary);
+        int activationCount = 0;
+        primary.ActivationRequested += (_, _) => Interlocked.Increment(ref activationCount);
         using (var abandoned = new NamedPipeClientStream(".", primary.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly))
         {
             await abandoned.ConnectAsync(1000, TestContext.Current.CancellationToken);
@@ -55,6 +57,7 @@ public sealed class SingleInstanceActivationTests
         Task<SingleInstanceActivation?>[] requests = Enumerable.Range(0, 8).Select(_ => SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken)).ToArray();
         var responses = await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.All(responses, Assert.Null);
+        Assert.InRange(Volatile.Read(ref activationCount), 8, sendRequest ? 9 : 8);
     }
 
     [Fact]
