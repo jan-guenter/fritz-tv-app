@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=FRITZ TV
+Comment=TV and radio from your FRITZ!Box
+Comment[de]=Fernsehen und Radio von Ihrer FRITZ!Box
+Exec=/opt/fritz-tv/FritzTV.Desktop
+Icon=fritz-tv
+Terminal=false
+Categories=AudioVideo;Player;TV;
+StartupWMClass=FritzTV.Desktop

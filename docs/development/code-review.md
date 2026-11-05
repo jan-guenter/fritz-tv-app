@@ -1,0 +1,116 @@
+# CodeRabbit implementation review
+
+The first complete implementation review finished on **2026-11-05 at 05:39:19 UTC** with CodeRabbit CLI **0.9.1**. It compared `codex/windows-bootstrap-and-player` at `3209b17`, including its working-tree changes, against `main`. Both `AGENTS.md` and `.coderabbit.yaml` supplied review instructions. Binary application icons were excluded by the reviewer.
+
+CodeRabbit reported **18 issues**. Four follow-up reports repeated existing locations, leaving **14 distinct issues: four major, nine minor, and one trivial**. It reported no critical issues. The table consolidates duplicates; it does not treat duplicate reports as additional defects.
+
+The review command was:
+
+```bash
+coderabbit review --agent --fresh --deep --base main --include-untracked \
+  -c AGENTS.md .coderabbit.yaml
+```
+
+Initial authentication failed despite a locally authenticated status. The official browser sign-in completed, authentication was verified again, and the subsequent review completed successfully. Review credentials and raw review output remain outside the repository.
+
+## Automatic PR review status
+
+The GitHub App is installed and PR #1 was marked ready, but the [bot status](https://github.com/jan-guenter/fritz-tv-app/pull/1#issuecomment-6647891537) updated at **2026-11-05 09:44:09 UTC** skipped the automatic review of `b12c72f`. It reported **232 selected files against the Essentials limit of 150**, plus **insufficient usage credits or metered capacity**. No automatic code review or new actionable inline findings resulted; account/billing settings were left unchanged.
+
+The four completed CLI reviews below produced **39 reports** in total (18 initial, 12 incremental, eight scoped correction reports and one fixture follow-up, including the documented duplicates). Their corrections and focused validation are the available review evidence. They do not establish a subsequent zero-issue GitHub App review.
+
+## Issues and validation
+
+“Implemented” means the correction is present and its stated focused validation passed. “Pending” means implementation or validation has not yet been reported complete. The incremental review results and follow-up corrections are recorded below.
+
+| Severity | File | Impact and correction | Focused validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [RecordingSchedulerService.cs](../../src/FritzTV.Infrastructure/Scheduling/RecordingSchedulerService.cs) | An exception omitted by the scheduler's filtered catch could stop the host or all future timer ticks. Keep the outer loop alive for non-shutdown failures, with structured error reporting. | Implemented. Three scheduler failure-isolation regressions cover invalid timezone, invalid arguments, and corrupt persisted JSON; a later valid timer starts even while the invalid definition remains persisted (strengthened after the incremental review). |
+| ⚠️ Major | [SatIpRecordingInputFactory.cs](../../src/FritzTV.Infrastructure/Recording/SatIpRecordingInputFactory.cs) | After a shared session failed, buffered recording could retain only a dead recording-priority lease while replacement viewing was preemptible. Surface loss of the protective lease through the recording reconnect path. | Implemented. Two protective-reader regressions cover readable backlog and a pending read after priority loss; recording lifecycle coverage verifies that another timer cannot preempt the recovering recording. |
+| ⚠️ Major | [RtspConnection.cs](../../src/FritzTV.Infrastructure/Transport/RtspConnection.cs) | A canceled or malformed response left the TCP connection reusable, allowing a late reply to acknowledge a later request. Fault and close the connection after write/read failure; fail the owning session and validate response sequence numbers. Preserve the experimentally verified FRITZ!Box `CSeq: 0` compatibility exception. | Implemented. Late-response cancellation, matching nonzero sequences, mismatched sequences, and existing zero-sequence cases pass. |
+| ⚠️ Major | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Retry counts accumulated across otherwise healthy recording intervals, eventually stopping a long recording. Count consecutive failures and reset the budget after successful input delivery. | Implemented. Four separate outages with 30-second healthy write windows between them reach a fifth input; brief-data and empty failures remain bounded to four opens. |
+| ℹ️ Minor | [NativeDesktopSession.cs](../../tests/FritzTV.Windows.UiTests/NativeDesktopSession.cs) | Constructor failure could leave the launched process, UI automation objects, and isolated profile alive, poisoning later desktop tests. Clean up partially constructed sessions. | Implemented. The Windows-targeted test project builds with zero warnings/errors. Failed-construction and expected UIA teardown paths dispose owned resources; interactive acceptance remains separately reported. |
+| ℹ️ Minor | [build-deb.sh](../../packaging/build-deb.sh) | A semver prerelease such as `1.0.0-rc.1` sorts after stable `1.0.0` in Debian version ordering. Use a Debian `~` prerelease separator in package metadata. | Implemented. A real prerelease package contains `Version: 0.1.0~rc.1`; `dpkg --compare-versions` confirms it sorts before `0.1.0`. `bash -n` passed. |
+| ℹ️ Minor | [windows-ui.yml](../../.github/workflows/windows-ui.yml) | Verification could succeed with missing tools, and its report could name the manual checkout rather than the workflow checkout. Pass the actual workspace and enforce the report's toolchain result. | Implemented. Actionlint passed all workflows. Actual VM `-VerifyOnly -WorkspaceRoot $PWD.Path` reported all required tools installed and its SHA matched the checkout. |
+| ℹ️ Minor | [release.yml](../../.github/workflows/release.yml) | A manually dispatched draft could create a tag on a different commit from its packaged artifacts. Set `target_commitish` to `github.sha`. | Implemented; diff/whitespace check passed. Full workflow lint remains part of integrated checks. |
+| ℹ️ Minor | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Unavailable sleep inhibition canceled an otherwise receivable recording. Continue capture with a visible, separately persisted warning so healthy data is not mislabeled partial. | Implemented. A no-op inhibition fallback persists `RecordingInstance.Warning`; its regression completes healthy capture as Completed rather than Partial. |
+| ℹ️ Minor | [Strings.de.resx](../../src/FritzTV.Desktop/Resources/Strings.de.resx) | The German expander header omitted its recordings tab. Include “Aufnahmen” in the label. | Implemented; resource XML and the exact revised label verified. |
+| ℹ️ Minor | [Program.cs](../../src/FritzTV.Desktop/Program.cs) | Failure to activate an existing instance could escape the second process's entry point. Handle the failed activation and return an actionable nonzero exit. | Implemented. Expected IO, invalid-data, and access-denied activation failures are reported at the entry point; the strict solution build passes. Native Windows activation tests pass with explicit bounded pipe buffers. |
+| ℹ️ Minor | [EitParser.cs](../../src/FritzTV.Infrastructure/Dvb/EitParser.cs) | Decoding extended-event fragments separately corrupted characters split across descriptor boundaries. Join ordered raw text bytes, remove repeated matching encoding selectors, and decode once. | Implemented. ISO6937 diacritic and UTF-8 multibyte split regressions pass alongside existing extended-description tests. |
+| ℹ️ Minor | [SsdpDiscovery.cs](../../src/FritzTV.Infrastructure/Devices/SsdpDiscovery.cs) | Binding a local address did not explicitly select the outbound multicast interface. Set `IP_MULTICAST_IF` for the selected interface. | Implemented; strict compilation passed. Actual SSDP discovery still requires the separate reachable-LAN validation described in the implementation plan. |
+| ℹ️ Trivial | [GuideService.cs](../../src/FritzTV.Infrastructure/Guide/GuideService.cs) | The scan deadline used system time while other guide timing used the injected clock. Create its timeout through the injected `TimeProvider`. | Implemented; strict compilation and existing guide regressions are the focused checks. |
+
+The owned RTSP and DVB regression run passed **15/15 tests**. Recording review regressions passed **16/16**, scheduler resilience passed **3/3**, and protective reader regressions passed **2/2**; the integrated strict solution build reported zero warnings and errors. Networking body-deadline, caller-cancellation, malformed-control, and guide error-boundary checks also passed **17/17** before these review fixes. Native desktop and media acceptance results are tracked separately in [verification.md](verification.md); source-level review does not substitute for those checks.
+
+## Incremental review
+
+The follow-up review used CLI **0.9.2**, completed successfully on **2026-11-05**, and reviewed corrections through `556d878` against the first implementation review checkpoint:
+
+```bash
+coderabbit review --agent --deep \
+  --base-commit 3209b173fb3d247591ec9e24638f9a4d163e3e1a \
+  --include-untracked -c AGENTS.md .coderabbit.yaml
+```
+
+CodeRabbit reported **12 issues**: two major, five minor, and five trivial reports. They concern nine locations: the scheduler and recorded-file opacity reports repeat, and the retry-budget follow-up separates the unbounded-error consequence already described in its first report. This review was not clean; the table records its concrete follow-up work.
+
+| Severity | File | Impact and follow-up correction | Validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [RecordingSchedulerService.cs](../../src/FritzTV.Infrastructure/Scheduling/RecordingSchedulerService.cs) / [AppRepository.cs](../../src/FritzTV.Infrastructure/Persistence/AppRepository.cs) | Retrying a failed tick still leaves every valid due recording blocked by the same invalid persisted definition. Isolate unreadable rows and per-definition expansion/materialization failures, retain diagnostics, and continue valid work. | Implemented. Malformed JSON, null payload, and mismatched identities remain stored and diagnosed while healthy rows are returned. Four scheduler regressions start valid due capture while invalid timezone, padding, JSON, or typed EPG definitions remain persisted; each identifies the bad definition in diagnostics. The same definition guard covers legacy migration, guide updates, and materialization. |
+| ℹ️ Minor | [EitParser.cs](../../src/FritzTV.Infrastructure/Dvb/EitParser.cs) | A later extended-description field can select a different character table. Join only compatible raw fragments, decode at selector changes, and preserve boundary whitespace. | Implemented; mixed UTF-8/ISO-8859-1 and UTF-8/default-ISO6937 fixtures pass alongside split-character fixtures. |
+| ℹ️ Minor | [LibVlcPlaybackController.cs](../../src/FritzTV.Desktop/Services/LibVlcPlaybackController.cs) | Recorded-file teletext transparency returned early because it had no live buffer. Apply decoder opacity and retain the file position. | Implemented. Actual retained TS playback shows page 100 opaque at 00:09 and transparent over moving video at 00:16 without resetting the cursor. A paused single-program file stays at 00:16 through the change and resumes opaque at 00:22. Desktop follow-up tests pass 18/18 with zero build warnings/errors. |
+| ℹ️ Minor | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | A single chunk rearmed retries, allowing endless rapid reconnects and unbounded repeated error text. Require sustained healthy reception before reset and bound/de-duplicate reception diagnostics. | Implemented. A 30-second healthy actual-write window resets retries. Sixteen recording tests pass, plus an independent long-message/flapping test: four opens, recoverable Partial output, at most 2048 diagnostic characters, and one repeated-cause entry. |
+| ℹ️ Trivial | [SingleInstanceActivationTests.cs](../../tests/FritzTV.Desktop.Tests/SingleInstanceActivationTests.cs) | Acknowledgements alone did not prove delivery of every activation event. Count eight delivered events in the concurrent-request regression. | Implemented. Eight concurrent acknowledged requests must produce their activation events, accounting separately for an optional abandoned valid request; all five native activation tests pass. |
+| ℹ️ Trivial | [GuideTests.cs](../../tests/FritzTV.Infrastructure.Tests/GuideTests.cs) | The malformed-SETUP case did not establish skipped-frequency completion. Assert total/completed counts and refresh timestamp. | Implemented; all completion/error/tuner-release assertions pass. |
+| ℹ️ Trivial | [MainWindow.axaml.cs](../../src/FritzTV.Desktop/MainWindow.axaml.cs) | New warmup-cover lifecycle lacked native behavior coverage for readiness, bounds, movement, and minimize/restore. | Implemented and executed on the interactive Windows VM at `2a9fe43`. The native helper passed actual cover bounds, movement, minimize/restore while paused after rewind, then disappearance after resume/readiness, without product hooks. That run later failed during short buffered-TV finalization. The complete live-only case, including these same cover assertions and MKV publication, subsequently passed at `fcf6b29`. |
+| ℹ️ Trivial | [SsdpDiscovery.cs](../../src/FritzTV.Infrastructure/Devices/SsdpDiscovery.cs) | Compilation did not verify outbound selected-interface multicast. Add an opt-in socket-level behavior check. | Implemented and passed on synthetic Linux loopback: selected source address, M-SEARCH payload, and response deduplication. Actual reachable-LAN multicast validation remains pending. |
+| ℹ️ Trivial | [GuideService.cs](../../src/FritzTV.Infrastructure/Guide/GuideService.cs) | The injected-clock deadline lacked behavioral proof. Block a scan, advance the clock to 60 seconds, and separately cancel its caller. | Implemented; both timeout and external-cancellation fixtures pass without waiting 60 wall-clock seconds. |
+
+Focused DVB, repository, guide, and synthetic multicast regressions passed **22/22** with zero compiler/analyzer warnings. Default test runs skip the opt-in multicast check. Set `FRITZTV_SSDP_TEST_ADDRESS` to the chosen IPv4 address to run it; the loopback result validates the synthetic fixture and does not claim FRITZ!Box LAN discovery.
+
+Windows activation diagnosis also proved that zero-sized named-pipe buffers can block a pre-listener write even after connection succeeds. Explicit **256-byte** input/output buffers pass the native pre-ready request and eight-client burst checks. The five native activation cases and ten repeated runs (50 further cases, including 160 concurrent follow-up requests) passed. Thread-pool changes were tested privately and were unnecessary.
+
+The final infrastructure run passed **112/116 tests**, with four documented opt-in skips and zero failures. Scheduler isolation passed **4/4**, including a typed malformed EPG row. The strict full-solution build reported zero warnings/errors, and the exact full-solution formatting verification passed.
+
+Status at `cd207dc`: the reviewed corrections passed the strict full-solution build, **138/142 tests** with four opt-in skips, and formatting. The final scoped review below then identified additional follow-ups; this checkpoint was not a clean final review.
+
+## Final scoped correction review
+
+The next CodeRabbit review completed successfully on **2026-11-05 at 07:30:46 UTC** using CLI **0.9.2**. It compared `cd207dc` with `556d878`:
+
+```bash
+coderabbit review --agent --deep \
+  --base-commit 556d8781b0f484a4df40b8b66110387c0742d4fa \
+  --include-untracked -c AGENTS.md .coderabbit.yaml
+```
+
+CodeRabbit raised **8 issues: three major, two minor, and three trivial**, with no duplicate reports and no critical issues. The correction status is explicit below.
+
+| Severity | File | Impact and correction | Validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [SsdpNetworkTests.cs](../../tests/FritzTV.Infrastructure.Tests/SsdpNetworkTests.cs) | Real SAT>IP responders made the opt-in test's global single-result assertion fail. Assert uniqueness of the synthetic URI while accepting other devices. | Implemented. The loopback fixture also emits an additional distinct device URI and passes with that URI present plus one copy of the duplicated synthetic URI. |
+| ⚠️ Major | [MainWindowViewModel.Recordings.cs](../../src/FritzTV.Desktop/ViewModels/MainWindowViewModel.Recordings.cs) | An archived TS recording used the channel's current SID, which can differ from the capture after refresh. Persist actual capture identity and use it for archived playback. | Backward-compatible `RecordingInstance.ServiceId` is persisted from the actual capture, including late PMT resolution, and retained across retry/recovery. Six identity lifecycle tests pass; legacy null SID uses source probing for finalization. Archived playback uses only that captured SID. Its regression keeps SID 4321 selected after the current channel changes to 1234; the desktop follow-up run passes 22/22. |
+| ⚠️ Major | [LibVlcPlaybackController.cs](../../src/FritzTV.Desktop/Services/LibVlcPlaybackController.cs) | A positive file cursor was clamped to zero while LibVLC still reported unknown length. Preserve elapsed time until a positive length is known. | Implemented. Unknown-length snapshots retain positive elapsed time and clamp only after a positive length arrives. Four ordering/clamp cases pass in the 22/22 desktop run; the retained-TS visual opacity/cursor validation above remains the native file-playback evidence. |
+| ℹ️ Minor | [SsdpNetworkTests.cs](../../tests/FritzTV.Infrastructure.Tests/SsdpNetworkTests.cs) | Another host's M-SEARCH could be mistaken for the selected-interface request. Filter its source address before accepting it. | Implemented; the selected-interface loopback fixture passes. Actual reachable-LAN validation remains pending. |
+| ℹ️ Minor | [verification.md](verification.md) | The documented installer compiler lookup selected the first existing Inno Setup executable regardless of its version. Require the pinned 6.7.3 compiler. | Implemented. The documented lookup requires product version parts 6/7/3/0 before selecting ISCC, accepting the equivalent 6.7.3 and 6.7.3.0 forms and rejecting older installations. |
+| ℹ️ Trivial | [LiveAutomationDiagnostics.cs](../../tests/FritzTV.Windows.UiTests/LiveAutomationDiagnostics.cs) | Raw FindFirst lookups miss controls behind the embedded video HWND. Include working control-view ID-specific state. | Implemented as an additional `ControlViewById` section. The raw lookup section is intentionally retained because its contrast with the same HWND's control-view results proved the automation traversal defect. Strict Windows-targeted build passes. |
+| ℹ️ Trivial | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Repeated invalid persisted definitions emitted identical warnings every scheduler tick. Bound and deduplicate diagnostic state while permitting a repaired definition to be reported again if it later fails. | Implemented. A bounded diagnostic cache suppresses unchanged bad-definition warnings; both independent repair and deletion regressions pass and permit a fresh warning after the same ID becomes invalid again. |
+| ℹ️ Trivial | [RecordingCoordinator.cs](../../src/FritzTV.Infrastructure/Recording/RecordingCoordinator.cs) | Broad definition catches could mislabel malformed stored channels/recordings as invalid timer definitions. Isolate definition validation/expansion and let storage failures reach the outer scheduler diagnostic. | Implemented. Only definition validation/expansion is caught as a timer error; repository awaits run outside those catches. Padding/date arithmetic is preflighted before storage. Strict solution build and existing isolation/lifecycle regressions pass. |
+
+Owned corrective builds pass with zero warnings/errors; the updated synthetic multicast regression passes **1/1**. Final infrastructure checks pass **120/124 tests**, with four documented opt-in skips and zero failures; captured-identity lifecycle tests pass **6/6**, warning deduplication passes **2/2**, and full-solution formatting passes. Desktop follow-up tests pass **22/22** with zero build warnings/errors. All eight scoped issues are corrected with the stated validation; the raw diagnostic comparison was retained intentionally alongside the working lookup. This records resolved review issues, not a subsequent zero-issue CodeRabbit result. Native warmup-cover lifecycle assertions subsequently passed in the interactive Windows live case at `2a9fe43`; the complete live-only case, including TV recording and MKV publication, subsequently passed at `fcf6b29`, as recorded in the acceptance notes.
+
+## Scoped alias and native-fixture follow-up
+
+One additional CLI **0.9.2** review completed on **2026-11-05**, covering only committed changes from `2a9fe43` through `356b999`. Existing authentication succeeded; no CLI quota or account error occurred. It reviewed fourteen changed files and raised **one major issue**, with no duplicate reports:
+
+```bash
+coderabbit review --agent --deep -t committed \
+  --base-commit 2a9fe43bb298f519fc8491ba5d3540cff8f9f40b \
+  -c AGENTS.md .coderabbit.yaml
+```
+
+| Severity | File | Impact and correction | Validation / status |
+| --- | --- | --- | --- |
+| ⚠️ Major | [NativeMediaRetention.cs](../../tests/FritzTV.Windows.UiTests/NativeMediaRetention.cs) | Checking the artifact directory before constructing the destination accepted the profile's parent; the computed copy would then fall inside the profile being copied and deleted. Compute and normalize the final destination first, then reject containment before enumeration. | Implemented. Five synthetic retention cases passed on the actual Windows VM over SSH, including the new parent-directory regression, existing nested-destination rejection, valid external copy, default opt-out and CI privacy. The project builds with zero warnings/errors and formatting passes. No desktop or live media was used for these checks. |
+
+No additional review loop was run. This resolved report remains distinct from the capacity-blocked automatic GitHub App review. The live-only Windows case subsequently passed 1/1 at `fcf6b29`; prior smoke/fixture and corrected-retention runs remain separately scoped in the acceptance notes.

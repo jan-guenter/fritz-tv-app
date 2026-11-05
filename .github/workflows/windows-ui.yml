@@ -1,0 +1,79 @@
+name: Windows desktop acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_device_url:
+        description: 'Optional reachable descriptor URL for live playback/background recording acceptance'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fritz-tv-win11-desktop
+  cancel-in-progress: false
+
+jobs:
+  desktop:
+    if: github.ref == 'refs/heads/main' && github.repository == 'jan-guenter/fritz-tv-app'
+    runs-on: [self-hosted, Windows, X64, fritz-tv-win11]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: true
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Verify interactive desktop and toolchain
+        shell: pwsh
+        run: |
+          ./scripts/dev/Initialize-WindowsVm.ps1 -VerifyOnly -WorkspaceRoot $PWD.Path
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          $reportPath = Join-Path $env:LOCALAPPDATA 'FritzTVDevelopment/verification.json'
+          Copy-Item $reportPath artifacts/toolchain.json
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if (-not $report.AllRequiredToolsInstalled) { throw 'Required Windows toolchain components are missing.' }
+      - name: Build exact revision
+        shell: pwsh
+        run: |
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          git rev-parse HEAD | Set-Content artifacts/commit.txt
+          dotnet --info | Set-Content artifacts/dotnet-info.txt
+          dotnet restore --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish src/FritzTV.Desktop -c Release -r win-x64 --self-contained true --no-restore -o artifacts/app
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet restore tests/FritzTV.Windows.UiTests --locked-mode
+          exit $LASTEXITCODE
+      - name: Run native desktop regression tests
+        env:
+          FRITZTV_LIVE_DEVICE: ${{ inputs.live_device_url }}
+        shell: pwsh
+        run: |
+          $env:FRITZTV_UI_APP = Join-Path $PWD 'artifacts/app/FritzTV.Desktop.exe'
+          $env:FRITZTV_RTP_FIRST_PORT = '50000'
+          $env:FRITZTV_RTP_LAST_PORT = '50031'
+          $env:FRITZTV_LOG_DIRECTORY = Join-Path $PWD 'artifacts/logs'
+          $env:FRITZTV_UI_ARTIFACTS = Join-Path $PWD 'artifacts/ui-logs'
+          dotnet test --project tests/FritzTV.Windows.UiTests/FritzTV.Windows.UiTests.csproj -c Release --report-trx --results-directory artifacts/test-results
+          exit $LASTEXITCODE
+      - name: Capture console screenshot on failure
+        if: failure()
+        shell: powershell
+        run: ./packaging/Capture-Desktop.ps1 -OutputPath artifacts/desktop-failure.png
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-desktop-${{ github.sha }}
+          path: |
+            artifacts/test-results
+            artifacts/*.txt
+            artifacts/*.png
+            artifacts/*.json
+            artifacts/logs
+            artifacts/ui-logs
+          if-no-files-found: warn

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/fritz-tv.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <AssemblyName>FritzTV.Desktop</AssemblyName>
+    <RuntimeIdentifiers>linux-x64;win-x64</RuntimeIdentifiers>
+    <NuGetLockFilePath Condition="$([MSBuild]::IsOSPlatform('Windows'))">packages.windows.lock.json</NuGetLockFilePath>
+    <NuGetLockFilePath Condition="!$([MSBuild]::IsOSPlatform('Windows'))">packages.linux.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/**" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="LibVLCSharp.Avalonia" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" PrivateAssets="all" Condition="'$(RuntimeIdentifier)' == 'win-x64' or $([MSBuild]::IsOSPlatform('Windows'))" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <ProjectReference Include="../FritzTV.Core/FritzTV.Core.csproj" />
+    <ProjectReference Include="../FritzTV.Infrastructure/FritzTV.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
