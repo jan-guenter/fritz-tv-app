@@ -17,6 +17,7 @@ namespace FritzTV.Infrastructure.Recording;
 public sealed class RecordingCoordinator : IAsyncDisposable
 {
     private static readonly Action<ILogger, Guid, Exception?> LogCaptureFailure = LoggerMessage.Define<Guid>(LogLevel.Error, new EventId(2, "CaptureFailed"), "Recording {RecordingId} failed outside its capture handler; source data was retained.");
+    private static readonly Action<ILogger, Guid, RecordingState, string, Exception?> LogRecordingProblem = LoggerMessage.Define<Guid, RecordingState, string>(LogLevel.Warning, new EventId(3, "RecordingProblem"), "Recording {RecordingId} entered {State}: {Reason}");
     private readonly AppRepository repository;
     private readonly TimeProvider clock;
     private readonly IRecordingInputFactory inputs;
@@ -24,6 +25,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private readonly IPowerInhibitor power;
     private readonly ILogger<RecordingCoordinator> logger;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly CancellationTokenSource shutdown = new();
+    private readonly Lazy<Task> shutdownPreparation;
     private readonly ConcurrentDictionary<Guid, CaptureJob> active = new();
     private bool recovered;
     private DateTimeOffset nextMaterialization = DateTimeOffset.MinValue;
@@ -40,6 +43,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         this.finalizer = finalizer ?? new RecordingFinalizer();
         power = powerInhibitor ?? new SystemPowerInhibitor();
         this.logger = logger ?? NullLogger<RecordingCoordinator>.Instance;
+        shutdownPreparation = new Lazy<Task>(PrepareShutdownCoreAsync);
     }
 
     public event EventHandler? Changed;
@@ -68,7 +72,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
                 throw new ArgumentException("The timer channel is no longer configured.", nameof(definition));
             }
 
-            definition = definition with { ChannelId = channel.Id };
+            var settings = await repository.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+            definition = ResolvePadding(definition with { ChannelId = channel.Id }, settings);
             var expanded = ScheduleCalculator.Expand(definition, clock.GetUtcNow().AddDays(-1), clock.GetUtcNow().AddDays(14), clock.GetUtcNow());
             await repository.SaveDefinitionAsync(definition, cancellationToken).ConfigureAwait(false);
             await MaterializeDefinitionAsync(definition, expanded, cancellationToken).ConfigureAwait(false);
@@ -86,7 +91,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(settings);
-        ObjectDisposedException.ThrowIf(disposed != 0, this);
+        ObjectDisposedException.ThrowIf(disposed != 0 || shutdown.IsCancellationRequested, this);
         channel = await repository.GetChannelAsync(channel.Id, cancellationToken).ConfigureAwait(false) ?? channel;
         if (!channel.IsAvailable)
         {
@@ -111,7 +116,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             await SaveAsync(instance with { State = RecordingState.Failed, Error = "The instant recording request was canceled before capture started." }, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             await SaveAsync(instance with { State = RecordingState.Failed, Error = exception.Message }, CancellationToken.None).ConfigureAwait(false);
             throw;
@@ -211,8 +216,14 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (shutdown.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (!recovered)
             {
+                await MigrateLegacyPaddingAsync(cancellationToken).ConfigureAwait(false);
                 await RecoverAsync(cancellationToken).ConfigureAwait(false);
                 recovered = true;
             }
@@ -249,6 +260,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         }
     }
 
+    public Task PrepareShutdownAsync(CancellationToken cancellationToken = default) => shutdownPreparation.Value.WaitAsync(cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
@@ -256,14 +269,54 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             return;
         }
 
+        await shutdownPreparation.Value.ConfigureAwait(false);
+        shutdown.Dispose();
+        gate.Dispose();
+    }
+
+    private async Task PrepareShutdownCoreAsync()
+    {
+        Task cancellation = shutdown.CancelAsync();
         foreach (var job in active.Values)
         {
             job.RequestStop(interrupted: true);
         }
 
-        await Task.WhenAll(active.Values.Select(job => job.Completion)).ConfigureAwait(false);
-        gate.Dispose();
+        await cancellation.ConfigureAwait(false);
+        await gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        CaptureJob[] jobs;
+        try
+        {
+            jobs = active.Values.ToArray();
+            foreach (var job in jobs)
+            {
+                job.RequestStop(interrupted: true);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        await Task.WhenAll(jobs.Select(job => job.Completion)).ConfigureAwait(false);
     }
+
+    private async Task MigrateLegacyPaddingAsync(CancellationToken cancellationToken)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+        var definitions = await repository.GetDefinitionsAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var definition in definitions.Where(item => item.StartPadding is null || item.EndPadding is null))
+        {
+            var resolved = ResolvePadding(definition, settings);
+            await repository.ResolveDefinitionPaddingAsync(resolved, definition.EffectiveStartPadding, definition.EffectiveEndPadding, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static RecordingDefinition ResolvePadding(RecordingDefinition definition, AppSettings settings) => definition with
+    {
+        StartPadding = definition.StartPadding ?? settings.DefaultStartPadding,
+        EndPadding = definition.EndPadding ?? settings.DefaultEndPadding,
+    };
 
     private async Task StartDueInstancesAsync(IReadOnlyList<RecordingDefinition> definitions, CancellationToken cancellationToken)
     {
@@ -299,7 +352,11 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             {
                 await StartCaptureAsync(instance, channel, settings, null, null, definitions.FirstOrDefault(item => item.Id == instance.DefinitionId)?.RetainTransportStream ?? false, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
                 await SaveAsync(instance with { State = exception is TunerUnavailableException ? RecordingState.Conflict : RecordingState.Failed, Error = exception.Message }, cancellationToken).ConfigureAwait(false);
             }
@@ -340,6 +397,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
 
     private async Task<RecordingInstance> StartCaptureAsync(RecordingInstance instance, TvChannel channel, AppSettings settings, BufferedPlayback? playback, DateTimeOffset? from, bool retainSource, CancellationToken cancellationToken)
     {
+        using var startCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, shutdown.Token);
         Directory.CreateDirectory(settings.RecordingDirectory);
         CheckFreeSpace(settings);
         IRecordingInput? input = null;
@@ -349,8 +407,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         var added = false;
         try
         {
-            input = await inputs.OpenAsync(channel, playback, from, cancellationToken).ConfigureAwait(false);
-            inhibition = await power.AcquireAsync(cancellationToken).ConfigureAwait(false);
+            input = await inputs.OpenAsync(channel, playback, from, startCancellation.Token).ConfigureAwait(false);
+            inhibition = await power.AcquireAsync(startCancellation.Token).ConfigureAwait(false);
             var source = instance.SourcePath ?? CreateSourcePath(settings.RecordingDirectory, instance);
             writer = new FileStream(source, FileMode.Append, FileAccess.Write, FileShare.Read, 188 * 256, FileOptions.Asynchronous);
             var output = instance.OutputPath ?? Path.ChangeExtension(source, channel.Kind == ChannelKind.Radio ? ".mka" : ".mkv");
@@ -363,7 +421,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             }
 
             added = true;
-            await SaveAsync(instance, cancellationToken).ConfigureAwait(false);
+            await SaveAsync(instance, startCancellation.Token).ConfigureAwait(false);
             _ = ObserveCaptureAsync(job, input, inhibition, writer);
             return instance;
         }
@@ -430,7 +488,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             serviceId = job.ServiceId ?? input.ServiceId ?? serviceId;
             error = job.Error;
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             job.Partial = true;
             error = AppendError(error, exception.Message);
@@ -439,9 +497,9 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             try
             {
-                if (job.Interrupted)
+                if (job.Interrupted || shutdown.IsCancellationRequested)
                 {
-                    await SaveAsync(job.Instance with { State = RecordingState.Partial, Error = AppendError(error, "Capture stopped when the application exited; transport data was retained.") }, CancellationToken.None).ConfigureAwait(false);
+                    await SaveAsync(job.Instance with { State = RecordingState.Partial, NeedsRecovery = true, Error = AppendError(error, "Capture stopped when the application exited; transport data was retained.") }, CancellationToken.None).ConfigureAwait(false);
                 }
                 else
                 {
@@ -537,7 +595,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             return await inputs.OpenAsync(job.Channel, cancellationToken: job.Cancellation.Token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             throw new ReceptionException("Recording reconnection failed: " + exception.Message, exception);
         }
@@ -590,7 +648,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             await SettleReadAsync(pending).ConfigureAwait(false);
             throw new ReceptionException("Recording reception timed out.", exception);
         }
-        catch (Exception exception) when (exception is IOException or System.Threading.Channels.ChannelClosedException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or System.Threading.Channels.ChannelClosedException)
         {
             throw new ReceptionException("Recording reception failed: " + exception.Message, exception);
         }
@@ -602,7 +660,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         {
             await pending.ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is OperationCanceledException or IOException or System.Threading.Channels.ChannelClosedException)
+        catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException or UnauthorizedAccessException or System.Threading.Channels.ChannelClosedException)
         {
             // An async iterator must leave MoveNext before its DisposeAsync may run.
         }
@@ -610,6 +668,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
 
     private async Task FinalizeCaptureAsync(RecordingInstance instance, TvChannel channel, bool retainSource, bool partial, string? error, CancellationToken cancellationToken)
     {
+        instance = instance with { NeedsRecovery = false };
         if (instance.SourcePath is null || instance.OutputPath is null || !File.Exists(instance.SourcePath) || new FileInfo(instance.SourcePath).Length == 0)
         {
             await SaveAsync(instance with { State = RecordingState.Failed, Error = AppendError(error, "No transport data was captured.") }, cancellationToken).ConfigureAwait(false);
@@ -622,7 +681,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             var result = await finalizer.FinalizeAsync(instance.SourcePath, instance.OutputPath, channel, retainSource || partial, cancellationToken).ConfigureAwait(false);
             await SaveAsync(instance with { State = partial ? RecordingState.Partial : RecordingState.Completed, OutputPath = result.OutputPath, Error = AppendError(error, result.Warning) }, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
         {
             await SaveAsync(instance with { State = RecordingState.Partial, Error = AppendError(error, "Finalization failed; transport data was retained: " + exception.Message) }, CancellationToken.None).ConfigureAwait(false);
         }
@@ -632,7 +691,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     {
         foreach (var instance in await repository.GetRecordingsAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (active.ContainsKey(instance.Id) || instance.State is not (RecordingState.Recording or RecordingState.Finalizing))
+            bool pendingManualInstant = instance.DefinitionId == Guid.Empty && instance.End == DateTimeOffset.MaxValue && instance.State is RecordingState.Scheduled or RecordingState.Conflict;
+            if (active.ContainsKey(instance.Id) || (instance.State is not (RecordingState.Recording or RecordingState.Finalizing) && !(instance.State == RecordingState.Partial && instance.NeedsRecovery) && !pendingManualInstant))
             {
                 continue;
             }
@@ -640,25 +700,25 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             var channel = await repository.GetChannelAsync(instance.ChannelId, cancellationToken).ConfigureAwait(false);
             if (channel is null)
             {
-                await SaveAsync(instance with { State = RecordingState.Failed, Error = "The interrupted recording channel is no longer configured." }, cancellationToken).ConfigureAwait(false);
+                await SaveAsync(instance with { State = RecordingState.Failed, NeedsRecovery = false, Error = "The interrupted recording channel is no longer configured." }, cancellationToken).ConfigureAwait(false);
             }
-            else if (instance.State == RecordingState.Recording && instance.End > clock.GetUtcNow())
+            else if (instance.State != RecordingState.Finalizing && instance.End != DateTimeOffset.MaxValue && instance.End > clock.GetUtcNow())
             {
-                await SaveAsync(instance with { State = RecordingState.Scheduled, Error = "Recording was interrupted and resumed; the reception gap is retained in its status." }, cancellationToken).ConfigureAwait(false);
+                await SaveAsync(instance with { State = RecordingState.Scheduled, NeedsRecovery = false, Error = "Recording was interrupted and resumed; the reception gap is retained in its status." }, cancellationToken).ConfigureAwait(false);
             }
             else if (instance.SourcePath is not null && File.Exists(instance.SourcePath))
             {
-                await FinalizeCaptureAsync(instance, channel, retainSource: true, partial: instance.State == RecordingState.Recording || instance.Error is not null,
+                await FinalizeCaptureAsync(instance, channel, retainSource: true, partial: pendingManualInstant || instance.NeedsRecovery || instance.State == RecordingState.Recording || instance.Error is not null,
                     AppendError(instance.Error, "Recovered after application restart."), cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await RecoverPublishedOutputAsync(instance, channel, cancellationToken).ConfigureAwait(false);
+                await RecoverPublishedOutputAsync(instance, channel, pendingManualInstant, cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
-    private async Task RecoverPublishedOutputAsync(RecordingInstance instance, TvChannel channel, CancellationToken cancellationToken)
+    private async Task RecoverPublishedOutputAsync(RecordingInstance instance, TvChannel channel, bool interruptedManualRequest, CancellationToken cancellationToken)
     {
         try
         {
@@ -668,11 +728,11 @@ public sealed class RecordingCoordinator : IAsyncDisposable
             }
 
             await finalizer.ValidateAsync(instance.OutputPath, channel.Kind, cancellationToken).ConfigureAwait(false);
-            await SaveAsync(instance with { State = RecordingState.Completed, Error = "Recovered a validated recording published before application restart." }, cancellationToken).ConfigureAwait(false);
+            await SaveAsync(instance with { State = interruptedManualRequest || instance.NeedsRecovery || instance.State == RecordingState.Recording || instance.Error is not null ? RecordingState.Partial : RecordingState.Completed, NeedsRecovery = false, Error = "Recovered a validated recording published before application restart." }, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
         {
-            await SaveAsync(instance with { State = RecordingState.Failed, Error = "No valid recording could be recovered: " + exception.Message }, cancellationToken).ConfigureAwait(false);
+            await SaveAsync(instance with { State = RecordingState.Failed, NeedsRecovery = false, Error = "No valid recording could be recovered: " + exception.Message }, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -683,7 +743,7 @@ public sealed class RecordingCoordinator : IAsyncDisposable
         var instances = await repository.GetRecordingsAsync(cancellationToken).ConfigureAwait(false);
         foreach (var definition in await repository.GetDefinitionsAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (definition.EventId is null || definition.RepeatOn != Weekdays.None || instances.Any(item => item.DefinitionId == definition.Id && item.State is not (RecordingState.Scheduled or RecordingState.Conflict)))
+            if (definition.EventId is null || definition.RepeatOn != Weekdays.None || instances.Any(item => item.DefinitionId == definition.Id && (item.SourcePath is not null || item.State is not (RecordingState.Scheduled or RecordingState.Conflict))))
             {
                 continue;
             }
@@ -701,11 +761,8 @@ public sealed class RecordingCoordinator : IAsyncDisposable
                 continue;
             }
 
-            await repository.SaveDefinitionAsync(definition with { Start = programme.Start, End = programme.End }, cancellationToken).ConfigureAwait(false);
-            foreach (var instance in instances.Where(item => item.DefinitionId == definition.Id && item.State is RecordingState.Scheduled or RecordingState.Conflict))
-            {
-                await SaveAsync(instance with { Start = programme.Start - definition.EffectiveStartPadding, End = programme.End + definition.EffectiveEndPadding }, cancellationToken).ConfigureAwait(false);
-            }
+            await repository.UpdateDefinitionTimingAsync(definition with { Start = programme.Start, End = programme.End }, cancellationToken).ConfigureAwait(false);
+            Changed?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -716,6 +773,11 @@ public sealed class RecordingCoordinator : IAsyncDisposable
     private async Task SaveAsync(RecordingInstance instance, CancellationToken cancellationToken)
     {
         await repository.SaveRecordingAsync(instance, cancellationToken).ConfigureAwait(false);
+        if (instance.Error is { } error && instance.State is RecordingState.Failed or RecordingState.Partial or RecordingState.Missed)
+        {
+            LogRecordingProblem(logger, instance.Id, instance.State, error, null);
+        }
+
         Changed?.Invoke(this, EventArgs.Empty);
     }
 

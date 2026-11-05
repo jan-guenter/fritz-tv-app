@@ -8,7 +8,7 @@ public static class ProgrammeMapParser
     public static IReadOnlyDictionary<ushort, int> ParsePat(ReadOnlySpan<byte> section)
     {
         var result = new Dictionary<ushort, int>();
-        if (!IsValid(section, 0, 12))
+        if (!IsValid(section, 0, 12) || (section.Length - 12) % 4 != 0)
         {
             return result;
         }
@@ -34,6 +34,10 @@ public static class ProgrammeMapParser
 
         var streams = new List<ElementaryStreamInfo>();
         var position = 12 + (((section[10] & 15) << 8) | section[11]);
+        if (position > section.Length - 4)
+        {
+            return null;
+        }
         while (position + 5 <= section.Length - 4)
         {
             var descriptorLength = ((section[position + 3] & 15) << 8) | section[position + 4];
@@ -64,11 +68,16 @@ public static class ProgrammeMapParser
                 descriptors = descriptors[(size + 2)..];
             }
 
+            if (!descriptors.IsEmpty)
+            {
+                return null;
+            }
+
             streams.Add(new ElementaryStreamInfo(((section[position + 1] & 31) << 8) | section[position + 2], section[position], language, teletext, subtitles));
             position += 5 + descriptorLength;
         }
 
-        return new ProgrammeMap(BinaryPrimitives.ReadUInt16BigEndian(section.Slice(3, 2)), pid, ((section[8] & 31) << 8) | section[9], streams);
+        return position != section.Length - 4 ? null : new ProgrammeMap(BinaryPrimitives.ReadUInt16BigEndian(section.Slice(3, 2)), pid, ((section[8] & 31) << 8) | section[9], streams);
     }
 
     private static bool IsValid(ReadOnlySpan<byte> section, byte tableId, int minimum) => section.Length >= minimum && section[0] == tableId

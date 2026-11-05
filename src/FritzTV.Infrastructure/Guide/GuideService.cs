@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FritzTV.Core.Guide;
 using FritzTV.Core.Models;
 using FritzTV.Infrastructure.Dvb;
 using FritzTV.Infrastructure.Persistence;
@@ -15,6 +16,9 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
     private readonly ConcurrentDictionary<(DvbServiceIdentity Service, ushort EventId), Programme> pending = new();
     private readonly SemaphoreSlim scanGate = new(1, 1);
     private readonly Lock statusLock = new();
+    private readonly Lock ingestionLock = new();
+    private readonly SemaphoreSlim cacheGate = new(1, 1);
+    private bool cacheLoaded;
     private GuideStatus status = new(false, 0, 0, null, 0, null, null);
     private int refreshRequested = 1;
     private DateTimeOffset? retryAt;
@@ -29,28 +33,41 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
         }
     }
 
-    public void Ingest(IEnumerable<Programme> programmes)
+    public void Ingest(IEnumerable<Programme> programmes) => IngestCore(programmes, persist: true);
+
+    private void IngestCore(IEnumerable<Programme> programmes, bool persist)
     {
         ArgumentNullException.ThrowIfNull(programmes);
         var now = clock.GetUtcNow();
         DateTimeOffset? latest = null;
         var changed = false;
-        foreach (var programme in programmes)
+        lock (ingestionLock)
         {
-            var key = (programme.Service, programme.EventId);
-            if (programme.End < now.AddDays(-1) || programme.Start > now.AddDays(14) || (known.Count >= 100000 && !known.ContainsKey(key)))
+            foreach (var programme in programmes)
             {
-                continue;
-            }
-            if (known.TryGetValue(key, out var previous) && !ShouldReplace(previous, programme, now))
-            {
-                continue;
+                var key = (programme.Service, programme.EventId);
+                if (programme.End < now.AddDays(-1) || programme.Start > now.AddDays(14) || (known.Count >= 100000 && !known.ContainsKey(key)))
+                {
+                    continue;
+                }
+                if (known.TryGetValue(key, out var previous) && !ProgrammeUpdatePolicy.ShouldReplace(previous, programme, now))
+                {
+                    continue;
+                }
+
+                known[key] = programme;
+                if (persist)
+                {
+                    pending[key] = programme;
+                }
+                else
+                {
+                    pending.TryRemove(key, out _);
+                }
+                changed = true;
+                latest = latest is null || programme.End > latest ? programme.End : latest;
             }
 
-            known[key] = programme;
-            pending[key] = programme;
-            changed = true;
-            latest = latest is null || programme.End > latest ? programme.End : latest;
         }
 
         if (changed)
@@ -68,6 +85,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
 
         try
         {
+            await LoadCachedAsync(cancellationToken).ConfigureAwait(false);
             await ScanAsync(cancellationToken).ConfigureAwait(false);
             await FlushAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -88,6 +106,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
             {
                 try
                 {
+                    await LoadCachedAsync(stoppingToken).ConfigureAwait(false);
                     await FlushAsync(stoppingToken).ConfigureAwait(false);
                     var settings = await repository.GetSettingsAsync(stoppingToken).ConfigureAwait(false);
                     if (scan.IsCompleted && (Interlocked.Exchange(ref refreshRequested, 0) != 0 || Status.LastRefreshUtc is null || (retryAt is { } retry ? clock.GetUtcNow() >= retry : clock.GetUtcNow() - Status.LastRefreshUtc >= settings.GuideRefreshInterval)))
@@ -95,7 +114,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
                         scan = RunScanSafelyAsync(stoppingToken);
                     }
                 }
-                catch (Exception exception) when (exception is IOException or System.Data.Common.DbException)
+                catch (Exception exception) when (exception is IOException or InvalidDataException or System.Text.Json.JsonException or System.Data.Common.DbException)
                 {
                     UpdateStatus(current => current with { LastError = exception.Message });
                     ScanFailed(logger, exception);
@@ -117,6 +136,26 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
     {
         base.Dispose();
         scanGate.Dispose();
+        cacheGate.Dispose();
+    }
+
+    private async Task LoadCachedAsync(CancellationToken cancellationToken)
+    {
+        await cacheGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!cacheLoaded)
+            {
+                var now = clock.GetUtcNow();
+                var cached = await repository.GetProgrammesAsync(now.AddDays(-1), now.AddDays(14), cancellationToken).ConfigureAwait(false);
+                IngestCore(cached, persist: false);
+                cacheLoaded = true;
+            }
+        }
+        finally
+        {
+            cacheGate.Release();
+        }
     }
 
     private async Task RunScanSafelyAsync(CancellationToken cancellationToken)
@@ -128,7 +167,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or HttpRequestException or System.Data.Common.DbException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException or HttpRequestException or System.Data.Common.DbException or System.ComponentModel.Win32Exception)
         {
             UpdateStatus(current => current with { LastError = exception.Message });
             ScanFailed(logger, exception);
@@ -150,7 +189,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
                 blocked |= !await ScanFrequencyAsync(device, group.ToArray(), cancellationToken).ConfigureAwait(false);
             }
 
-            UpdateStatus(current => current with { CompletedFrequencies = Status.CompletedFrequencies + 1 });
+            UpdateStatus(current => current with { CompletedFrequencies = current.CompletedFrequencies + 1 });
         }
 
         retryAt = blocked ? clock.GetUtcNow().AddMinutes(5) : null;
@@ -175,6 +214,10 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
             assembler.SectionReceived += (_, section) =>
             {
                 resolver.Observe(section);
+                if (section.Data.Span[0] == 0x42)
+                {
+                    coverage.ExpectServices(resolver.ExpectedScheduleServices);
+                }
                 coverage.Observe(section.Data.Span);
                 Ingest(EitParser.Parse(device.Id, section.Data.Span));
             };
@@ -196,7 +239,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
         {
             return false;
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException)
         {
             UpdateStatus(current => current with { LastError = exception.Message });
             FrequencySkipped(logger, device.Name, exception.Message);
@@ -221,7 +264,7 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
                         assembler.Push(packet);
                     }
                 }
-    
+
                 if (coverage.IsComplete && clock.GetElapsedTime(started) >= TimeSpan.FromSeconds(10))
                 {
                     break;
@@ -264,18 +307,6 @@ public sealed partial class GuideService(AppRepository repository, SatIpSessionM
             throw;
         }
     }
-
-    private static bool ShouldReplace(Programme previous, Programme incoming, DateTimeOffset now)
-    {
-        if (previous == incoming || Rank(previous, now) > Rank(incoming, now))
-        {
-            return false;
-        }
-
-        return previous.TableId != incoming.TableId || previous.Version == incoming.Version || ((incoming.Version - previous.Version + 32) % 32) < 16;
-    }
-
-    private static int Rank(Programme programme, DateTimeOffset now) => (programme.IsActualTransport ? 2 : 0) + (programme.TableId == 0x4e && programme.Start <= now && programme.End > now ? 2 : 0);
 
     private void UpdateStatus(Func<GuideStatus, GuideStatus> update)
     {

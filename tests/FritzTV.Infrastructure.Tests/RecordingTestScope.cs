@@ -142,6 +142,10 @@ internal sealed class RecordingTestScope : IAsyncDisposable
     {
         public bool Fail { get; set; }
 
+        public bool InvalidOutput { get; set; }
+
+        public bool AccessDenied { get; set; }
+
         public bool WaitForRelease { get; set; }
 
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -161,6 +165,16 @@ internal sealed class RecordingTestScope : IAsyncDisposable
             if (Fail)
             {
                 throw new IOException("Synthetic remux failure.");
+            }
+
+            if (InvalidOutput)
+            {
+                throw new InvalidDataException("Synthetic invalid container.");
+            }
+
+            if (AccessDenied)
+            {
+                throw new UnauthorizedAccessException("Synthetic recording access denied.");
             }
 
             File.Copy(sourcePath, outputPath, overwrite: false);

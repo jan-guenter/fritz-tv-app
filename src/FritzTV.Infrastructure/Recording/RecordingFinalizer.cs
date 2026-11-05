@@ -12,7 +12,21 @@ public sealed class RecordingFinalizer(string? executable = null, IMediaProcessR
     public static string ResolveExecutable()
     {
         var bundled = Path.Combine(AppContext.BaseDirectory, "tools", "mkvtoolnix", OperatingSystem.IsWindows() ? "mkvmerge.exe" : "mkvmerge");
-        return File.Exists(bundled) ? bundled : "mkvmerge";
+        if (File.Exists(bundled))
+        {
+            return bundled;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            string installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "MKVToolNix", "mkvmerge.exe");
+            if (File.Exists(installed))
+            {
+                return installed;
+            }
+        }
+
+        return "mkvmerge";
     }
 
     public async Task<RecordingFinalizationResult> FinalizeAsync(string sourcePath, string outputPath, TvChannel channel, bool retainSource, CancellationToken cancellationToken = default)

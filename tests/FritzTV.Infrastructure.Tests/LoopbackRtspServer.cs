@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -13,9 +15,12 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
     private readonly Task acceptTask;
     private int setupCount;
 
-    public LoopbackRtspServer(bool deferFirstSetup = false)
+    private readonly ConcurrentBag<TcpClient> connections = [];
+
+    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60)
     {
         DeferFirstSetup = deferFirstSetup;
+        SessionTimeoutSeconds = sessionTimeoutSeconds;
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         acceptTask = AcceptAsync(lifetime.Token);
@@ -25,9 +30,46 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
 
     public bool DeferFirstSetup { get; }
 
+    public int SessionTimeoutSeconds { get; }
+
     public TaskCompletionSource FirstSetup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public ConcurrentQueue<string> Requests { get; } = new();
+
+    public ConcurrentBag<int> RtpPorts { get; } = [];
+
+    public void CloseConnections()
+    {
+        foreach (var connection in connections)
+        {
+            connection.Dispose();
+        }
+    }
+
+    public Task SendTransportAsync(int pid, ushort sequence, CancellationToken cancellationToken)
+    {
+        var transport = new byte[188];
+        transport[0] = 0x47;
+        transport[1] = (byte)(pid >> 8);
+        transport[2] = (byte)pid;
+        transport[3] = 0x10;
+        return SendBatchAsync(transport, sequence, cancellationToken);
+    }
+
+    public async Task SendBatchAsync(ReadOnlyMemory<byte> transport, ushort sequence, CancellationToken cancellationToken)
+    {
+        var datagram = new byte[12 + transport.Length];
+        datagram[0] = 0x80;
+        datagram[1] = 33;
+        BinaryPrimitives.WriteUInt16BigEndian(datagram.AsSpan(2), sequence);
+        datagram[11] = 1;
+        transport.CopyTo(datagram.AsMemory(12));
+        using var sender = new UdpClient(AddressFamily.InterNetwork);
+        foreach (var port in RtpPorts)
+        {
+            await sender.SendAsync(datagram, new IPEndPoint(IPAddress.Loopback, port), cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -45,6 +87,7 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                connections.Add(client);
                 clients.Add(HandleAsync(client, cancellationToken));
             }
         }
@@ -67,8 +110,13 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                 }
 
                 Requests.Enqueue(line);
-                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { Length: > 0 })
+                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { Length: > 0 } header)
                 {
+                    var offset = header.IndexOf("client_port=", StringComparison.Ordinal);
+                    if (offset >= 0)
+                    {
+                        RtpPorts.Add(int.Parse(header[(offset + 12)..].Split('-')[0], CultureInfo.InvariantCulture));
+                    }
                 }
 
                 if (line.StartsWith("SETUP ", StringComparison.Ordinal))
@@ -81,11 +129,11 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                     }
                 }
 
-                var response = "RTSP/1.0 200 OK\r\nCSeq: 0\r\nSession: test-session;timeout=60\r\ncom.ses.streamID: 1\r\nContent-Length: 0\r\n\r\n";
+                var response = FormattableString.Invariant($"RTSP/1.0 200 OK\r\nCSeq: 0\r\nSession: test-session;timeout={SessionTimeoutSeconds}\r\ncom.ses.streamID: 1\r\nContent-Length: 0\r\n\r\n");
                 await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(response), cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (Exception exception) when (exception is IOException or OperationCanceledException or SocketException)
+        catch (Exception exception) when (exception is IOException or OperationCanceledException or SocketException or ObjectDisposedException)
         {
             // A canceled tuning attempt deliberately closes its RTSP connection.
         }

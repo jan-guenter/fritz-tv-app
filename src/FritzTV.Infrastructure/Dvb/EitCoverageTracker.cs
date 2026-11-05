@@ -6,28 +6,49 @@ public sealed class EitCoverageTracker
 
     public bool IsComplete => tables.Count > 0 && tables.Values.All(table => table.Complete);
 
+    public void ExpectServices(IEnumerable<ushort> services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        foreach (var service in services)
+        {
+            if (tables.Count < 8192)
+            {
+                tables.TryAdd((service, 0x50), new TableCoverage(-1, 0));
+            }
+        }
+    }
+
     public void Observe(ReadOnlySpan<byte> section)
     {
-        if (section.Length < 18 || section[0] is < 0x50 or > 0x5f || (section[5] & 1) == 0 || MpegCrc32.Compute(section) != 0)
+        if (section.Length < 18 || section[0] is < 0x50 or > 0x5f || (section[5] & 1) == 0 || section[6] > section[7]
+            || section.Length != 3 + (((section[1] & 15) << 8) | section[2]) || MpegCrc32.Compute(section) != 0)
         {
             return;
         }
 
         var serviceId = (ushort)((section[3] << 8) | section[4]);
         var lastTable = section[13];
-        if (lastTable < section[0] || lastTable > 0x5f || tables.Count >= 8192)
+        if (lastTable < section[0] || lastTable > 0x5f)
         {
             return;
         }
 
         for (var expectedTable = 0x50; expectedTable <= lastTable; expectedTable++)
         {
-            tables.TryAdd((serviceId, (byte)expectedTable), new TableCoverage(-1, 0));
+            if (tables.Count < 8192)
+            {
+                tables.TryAdd((serviceId, (byte)expectedTable), new TableCoverage(-1, 0));
+            }
         }
 
         var key = (serviceId, section[0]);
         var version = (section[5] >> 1) & 31;
-        if (!tables.TryGetValue(key, out var table) || table.Version != version)
+        if (!tables.TryGetValue(key, out var table))
+        {
+            return;
+        }
+
+        if (table.Version != version)
         {
             table = new TableCoverage(version, section[7]);
             tables[key] = table;

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FritzTV.Core.Models;
 using FritzTV.Infrastructure.Power;
 using FritzTV.Infrastructure.Recording;
@@ -29,8 +30,9 @@ public sealed class NativeRecordingTests
             var generated = await runner.RunAsync("ffmpeg", SyntheticArguments(source, kind), cancellationToken);
             Assert.True(generated.ExitCode == 0, generated.StandardError);
             var channel = new TvChannel("native", Guid.NewGuid(), "Original synthetic fixture", kind, new Uri("rtsp://192.0.2.1/"), 42);
-            var result = await new RecordingFinalizer(freeSpaceReserveBytes: 0).FinalizeAsync(source, output, channel, false, cancellationToken);
+            var result = await new RecordingFinalizer(freeSpaceReserveBytes: 0).FinalizeAsync(source, output, channel, true, cancellationToken);
             Assert.True(File.Exists(result.OutputPath));
+            await AssertDurationAndTracksAsync(runner, source, output, kind, cancellationToken);
             var decoded = await runner.RunAsync("ffmpeg", ["-nostdin", "-hide_banner", "-v", "error", "-i", output, "-f", "null", "-"], cancellationToken);
             Assert.True(decoded.ExitCode == 0, decoded.StandardError);
             Assert.Empty(decoded.StandardError);
@@ -52,6 +54,23 @@ public sealed class NativeRecordingTests
 
         await using var inhibition = await new SystemPowerInhibitor().AcquireAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(inhibition);
+    }
+
+
+    private static async Task AssertDurationAndTracksAsync(MediaProcessRunner runner, string source, string output, ChannelKind kind, CancellationToken cancellationToken)
+    {
+        var sourceResult = await runner.RunAsync(RecordingFinalizer.ResolveExecutable(), ["-J", source], cancellationToken).ConfigureAwait(false);
+        var outputResult = await runner.RunAsync(RecordingFinalizer.ResolveExecutable(), ["-J", output], cancellationToken).ConfigureAwait(false);
+        Assert.Equal(0, sourceResult.ExitCode);
+        Assert.Equal(0, outputResult.ExitCode);
+        using var original = JsonDocument.Parse(sourceResult.StandardOutput);
+        using var final = JsonDocument.Parse(outputResult.StandardOutput);
+        long duration = final.RootElement.GetProperty("container").GetProperty("properties").GetProperty("duration").GetInt64();
+        Assert.InRange(duration, 1_500_000_000L, 3_000_000_000L);
+        string[] originalCodecs = original.RootElement.GetProperty("tracks").EnumerateArray().Select(track => track.GetProperty("codec").GetString()!).Order(StringComparer.Ordinal).ToArray();
+        string[] finalCodecs = final.RootElement.GetProperty("tracks").EnumerateArray().Select(track => track.GetProperty("codec").GetString()!).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(originalCodecs, finalCodecs);
+        Assert.Equal(kind == ChannelKind.Television ? 2 : 1, finalCodecs.Length);
     }
 
     private static List<string> SyntheticArguments(string source, ChannelKind kind)

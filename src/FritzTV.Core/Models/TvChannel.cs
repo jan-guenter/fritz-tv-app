@@ -9,4 +9,5 @@ public sealed record TvChannel(
     int? ServiceId = null,
     bool IsFavorite = false,
     DvbServiceIdentity? ServiceIdentity = null,
-    bool IsAvailable = true);
+    bool IsAvailable = true,
+    int SortOrder = int.MaxValue);

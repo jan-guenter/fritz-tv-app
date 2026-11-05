@@ -7,6 +7,7 @@ namespace FritzTV.Infrastructure.Timeshift;
 public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
 {
     private readonly string directory;
+    private readonly FileStream ownerLease;
     private readonly TimeSpan retention;
     private readonly long byteLimit;
     private readonly long freeSpaceReserve;
@@ -14,7 +15,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
     private readonly SemaphoreSlim writerGate = new(1, 1);
     private readonly Lock stateLock = new();
     private readonly List<BufferSegment> segments = [];
-    private readonly Dictionary<int, byte[]> programmeTables = [];
+    private readonly Dictionary<int, PsiTableSnapshot> programmeTables = [];
     private readonly Dictionary<Guid, long> pins = [];
     private readonly PsiSectionAssembler tableAssembler = new();
     private readonly ProgrammeClock programmeClock = new();
@@ -50,6 +51,8 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         {
             throw new IOException("Use a new per-session directory for the timeshift buffer.");
         }
+
+        ownerLease = TimeshiftBufferMaintenance.CreateOwnership(this.directory);
     }
 
     public TimeshiftRange? Range
@@ -77,7 +80,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         {
             lock (stateLock)
             {
-                return videoPid is null ? totalBytes > 0 : segments.Sum(segment => segment.Entries.Count) >= 2;
+                return videoPid is null ? audioPid is not null && segments.Any(segment => segment.Entries.Count > 0) : segments.Sum(segment => segment.Entries.Count) >= 2;
             }
         }
     }
@@ -94,7 +97,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 programmeTables.Remove(oldPid);
             }
             videoPid = programme.Streams.FirstOrDefault(item => item.StreamType is 0x01 or 0x02 or 0x10 or 0x1b or 0x24)?.Pid;
-            audioPid = programme.Streams.FirstOrDefault(item => (item.StreamType is 0x03 or 0x04 or 0x0f or 0x11 or 0x06) && !item.IsTeletext && !item.IsDvbSubtitle)?.Pid;
+            audioPid = programme.Streams.FirstOrDefault(item => (item.StreamType is 0x03 or 0x04 or 0x0f or 0x11 or 0x06 or 0x81 or 0x87) && !item.IsTeletext && !item.IsDvbSubtitle)?.Pid;
         }
     }
 
@@ -164,7 +167,8 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
             var at = requested ?? segments[^1].End;
             var candidates = available.SelectMany(segment => segment.Entries.Select(entry => (Segment: segment, Entry: entry))).ToArray();
             var targetIndex = Array.FindLastIndex(candidates, item => item.Entry.At <= at);
-            targetIndex = Math.Max(0, targetIndex);
+            var minimumTarget = !pin && videoPid is not null && candidates.Length > 1 ? 1 : 0;
+            targetIndex = Math.Max(minimumTarget, targetIndex);
             var inputIndex = !pin && videoPid is not null ? Math.Max(0, targetIndex - 1) : targetIndex;
             var selected = candidates.Length > 0 ? candidates[inputIndex] : default;
             var segment = selected.Segment ?? available[0];
@@ -177,7 +181,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 pins.Add(identifier, segment.Id);
             }
 
-            return new TimeshiftReadStream(this, segment.Id, offset, actual, programmeTables.OrderBy(item => item.Key).SelectMany(item => item.Value).ToArray(), pinId, targetAt, cancellationToken);
+            return new TimeshiftReadStream(this, segment.Id, offset, actual, GetProgrammeTables(), pinId, targetAt, cancellationToken);
         }
     }
 
@@ -192,6 +196,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 await writer.DisposeAsync().ConfigureAwait(false);
                 writer = null;
             }
+            await ownerLease.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -371,8 +376,31 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
     {
         if (section.Data.Span[0] is 0 or 2)
         {
-            programmeTables[section.Pid] = PsiPacketizer.Packetize(section.Pid, section.Data.Span);
+            if (!programmeTables.TryGetValue(section.Pid, out var table))
+            {
+                table = new PsiTableSnapshot();
+                programmeTables.Add(section.Pid, table);
+            }
+
+            table.Observe(section.Data.Span);
         }
+    }
+
+    private byte[] GetProgrammeTables()
+    {
+        var packets = new List<byte>();
+        foreach (var (pid, table) in programmeTables.OrderBy(item => item.Key))
+        {
+            var continuity = 0;
+            foreach (var section in table.Sections)
+            {
+                var transport = PsiPacketizer.Packetize(pid, section.Span, continuity);
+                packets.AddRange(transport);
+                continuity = (continuity + transport.Length / 188) & 15;
+            }
+        }
+
+        return packets.ToArray();
     }
 
     private void CheckFreeSpace()

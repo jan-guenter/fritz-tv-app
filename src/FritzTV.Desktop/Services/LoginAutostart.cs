@@ -28,7 +28,8 @@ public static class LoginAutostart
             {
                 Directory.CreateDirectory(directory);
                 string escaped = executable.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("$", "\\$", StringComparison.Ordinal).Replace("`", "\\`", StringComparison.Ordinal);
-                string content = "[Desktop Entry]\nType=Application\nName=FRITZ TV\nExec=\"" + escaped + "\" --background\nTerminal=false\nX-GNOME-Autostart-enabled=true\n";
+                string tryExecutable = executable.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\t", "\\t", StringComparison.Ordinal);
+                string content = "[Desktop Entry]\nType=Application\nName=FRITZ TV\nTryExec=" + tryExecutable + "\nExec=\"" + escaped + "\" --background\nTerminal=false\nX-GNOME-Autostart-enabled=true\n";
                 await File.WriteAllTextAsync(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken).ConfigureAwait(false);
             }
             else

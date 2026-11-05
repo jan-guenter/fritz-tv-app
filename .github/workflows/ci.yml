@@ -37,6 +37,28 @@ jobs:
         run: dotnet build --no-restore -c Release -warnaserror
       - name: Unit and headless UI tests
         run: dotnet test --no-build -c Release --report-trx --results-directory artifacts/test-results
+      - name: Compile native Windows test project
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet restore tests/FritzTV.Windows.UiTests --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build tests/FritzTV.Windows.UiTests --no-restore -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test --project tests/FritzTV.Windows.UiTests/FritzTV.Windows.UiTests.csproj --no-build -c Release --report-trx --results-directory artifacts/native-project-results
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet format tests/FritzTV.Windows.UiTests/FritzTV.Windows.UiTests.csproj --verify-no-changes --no-restore
+          exit $LASTEXITCODE
+      - name: Dependency vulnerability report
+        shell: pwsh
+        run: |
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          $json = dotnet list package --vulnerable --include-transitive --format json --no-restore | Out-String
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $json | Set-Content artifacts/dependency-audit.json
+          $report = $json | ConvertFrom-Json
+          $vulnerable = @($report.projects | ForEach-Object { $_.frameworks } | ForEach-Object { @($_.topLevelPackages) + @($_.transitivePackages) } | Where-Object { $_.vulnerabilities.Count -gt 0 })
+          if ($vulnerable.Count -gt 0) { throw 'Vulnerable dependencies must be updated before merging.' }
       - name: Verify formatting
         run: dotnet format --verify-no-changes --no-restore
       - name: Host networking planner tests
@@ -50,6 +72,15 @@ jobs:
           $parseErrors = $null
           [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/dev/Initialize-WindowsVm.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { $parseErrors | Format-List | Out-String | Write-Error }
+      - name: Analyze PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Repository PSGallery -Force
+          Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0
+          $findings = @(Get-ChildItem -Path scripts/dev,packaging -Filter *.ps1 -Recurse | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error })
+          if ($findings.Count -gt 0) { $findings | Format-Table -AutoSize | Out-String | Write-Error; exit 1 }
       - name: Validate trusted-runner admission policy
         if: runner.os == 'Windows'
         shell: pwsh
@@ -58,8 +89,17 @@ jobs:
         if: always()
         with:
           name: test-results-${{ matrix.os }}
-          path: artifacts/test-results
+          path: |
+            artifacts/test-results
+            artifacts/dependency-audit.json
+            artifacts/native-project-results
           if-no-files-found: ignore
+
+  packages:
+    name: Installer packages
+    uses: ./.github/workflows/package.yml
+    with:
+      version: 0.1.0-ci
 
   workflows:
     name: Workflow and packaging lint
@@ -79,6 +119,12 @@ jobs:
           curl --fail --silent --show-error --location "$base/actionlint_${ACTIONLINT_VERSION}_checksums.txt" --output /tmp/actionlint-checksums.txt
           (cd /tmp && sha256sum --check --ignore-missing actionlint-checksums.txt)
           tar -xzf "/tmp/$archive" -C /tmp actionlint
+      - name: Install pinned Python linter
+        run: python3 -m pip install --disable-pip-version-check --no-deps --requirement requirements-lint.txt
+      - name: Lint and format Python tools
+        run: |
+          ruff check packaging/collect-licenses.py scripts/dev/windows-vm-host.py tests/dev
+          ruff format --check packaging/collect-licenses.py scripts/dev/windows-vm-host.py tests/dev
       - name: Validate workflows
         run: /tmp/actionlint -color
       - name: Validate packaging shell

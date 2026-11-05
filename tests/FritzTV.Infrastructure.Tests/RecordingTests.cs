@@ -141,13 +141,18 @@ public sealed class RecordingTests
         Assert.Equal(0, scope.Inputs.Active);
     }
 
-    [Fact]
-    public async Task FinalizationFailureAndPacketLossPreserveTransport()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task FinalizationFailureAndPacketLossPreserveTransport(bool invalidContainer, bool accessDenied)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = new RecordingTestScope();
         var channel = await scope.InitializeAsync(cancellationToken);
-        scope.Finalizer.Fail = true;
+        scope.Finalizer.Fail = !invalidContainer && !accessDenied;
+        scope.Finalizer.InvalidOutput = invalidContainer;
+        scope.Finalizer.AccessDenied = accessDenied;
         var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
         var input = scope.Inputs.Latest[channel.Id];
         input.LostPackets = 4;
@@ -155,9 +160,10 @@ public sealed class RecordingTests
         await scope.Coordinator.StopAsync(instance.Id, cancellationToken);
         var partial = Assert.Single(await scope.Coordinator.GetRecordingsAsync(cancellationToken));
         Assert.Equal(RecordingState.Partial, partial.State);
+        Assert.False(partial.NeedsRecovery);
         Assert.True(File.Exists(partial.SourcePath));
         Assert.Contains("4 RTP packets", partial.Error, StringComparison.Ordinal);
-        Assert.Contains("Synthetic remux failure", partial.Error, StringComparison.Ordinal);
+        Assert.Contains(accessDenied ? "Synthetic recording access denied" : invalidContainer ? "Synthetic invalid container" : "Synthetic remux failure", partial.Error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -185,6 +191,47 @@ public sealed class RecordingTests
         Assert.Equal(RecordingState.Partial, partial.State);
         Assert.True(new FileInfo(partial.SourcePath!).Length >= 2 * 188 * 512);
         Assert.Contains("Synthetic transport interruption", partial.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShutdownPreparationFlushesPartialTransportWithoutStartingFinalizationOrNewTimers()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = new RecordingTestScope();
+        var channel = await scope.InitializeAsync(cancellationToken);
+        var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), cancellationToken: cancellationToken);
+        await scope.Inputs.Latest[channel.Id].Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        await scope.Coordinator.PrepareShutdownAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        var partial = Assert.Single(await scope.Coordinator.GetRecordingsAsync(cancellationToken));
+        Assert.Equal(RecordingState.Partial, partial.State);
+        Assert.True(partial.NeedsRecovery);
+        Assert.Equal(188 * 512, new FileInfo(partial.SourcePath!).Length);
+        Assert.False(scope.Finalizer.Entered.Task.IsCompleted);
+        Assert.Equal(0, scope.Power.Active);
+        Assert.Equal(0, scope.Inputs.Active);
+        var now = scope.Clock.GetUtcNow();
+        await scope.Repository.SaveRecordingAsync(new RecordingInstance(Guid.NewGuid(), Guid.Empty, channel.Id, "Due during shutdown", now, now.AddHours(1), now, RecordingState.Scheduled), cancellationToken);
+        await scope.Coordinator.RunDueAsync(cancellationToken);
+        Assert.Single(scope.Inputs.Attempts);
+    }
+
+    [Fact]
+    public async Task ManuallyStoppedPartialWithRemainingTimeIsTerminalOnRecovery()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = new RecordingTestScope();
+        var channel = await scope.InitializeAsync(cancellationToken);
+        var instance = await scope.Coordinator.StartInstantAsync(channel, await scope.Repository.GetSettingsAsync(cancellationToken), until: scope.Clock.GetUtcNow().AddHours(1), cancellationToken: cancellationToken);
+        var input = scope.Inputs.Latest[channel.Id];
+        input.LostPackets = 1;
+        await input.Written.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        await scope.Coordinator.StopAsync(instance.Id, cancellationToken);
+        await scope.Coordinator.RunDueAsync(cancellationToken);
+        var stopped = Assert.Single(await scope.Coordinator.GetRecordingsAsync(cancellationToken));
+        Assert.Equal(RecordingState.Partial, stopped.State);
+        Assert.False(stopped.NeedsRecovery);
+        Assert.Single(scope.Inputs.Attempts);
+        Assert.Single(scope.Finalizer.Retained);
     }
 
     [Fact]

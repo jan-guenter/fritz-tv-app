@@ -63,7 +63,13 @@ public static class SatIpTuning
         foreach (var parameter in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var pair = parameter.Split('=', 2);
-            result[Uri.UnescapeDataString(pair[0])] = pair.Length == 2 ? Uri.UnescapeDataString(pair[1]) : string.Empty;
+            var key = Uri.UnescapeDataString(pair[0]);
+            // AVM playlist compatibility slots force unrelated sessions onto one tuner.
+            // Standard SAT>IP allocation must omit this proprietary client-slot parameter.
+            if (!string.Equals(key, "avm", StringComparison.OrdinalIgnoreCase))
+            {
+                result[key] = pair.Length == 2 ? Uri.UnescapeDataString(pair[1]) : string.Empty;
+            }
         }
 
         return result;

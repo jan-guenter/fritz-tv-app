@@ -7,7 +7,8 @@ using FritzTV.Core.Models;
 using FritzTV.Desktop.Localization;
 using FritzTV.Desktop.Services;
 using FritzTV.Infrastructure.Devices;
-using FritzTV.Infrastructure.Persistence;
+using FritzTV.Infrastructure.Guide;
+using FritzTV.Infrastructure.Recording;
 
 namespace FritzTV.Desktop.ViewModels;
 
@@ -17,10 +18,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly SsdpDiscovery _discovery;
     private readonly IPlaybackController _playback;
     private readonly List<TvChannel> _allChannels = [];
-    private readonly AppRepository? _repository;
+    private readonly List<SatIpDevice> _knownDevices = [];
+    private DiscoveryInterface? _selectedDiscoveryInterface;
+    private int _defaultStartPadding = 2;
+    private int _defaultEndPadding = 5;
+    private int _freeSpaceReserveGiB = 1;
+    private int _guideRefreshHours = 6;
+    private readonly IDesktopData? _data;
     private AppSettings _settings = new();
     private bool _favoritesOnly;
     private bool _startAtLogin;
+    private bool _retainTransportStreams;
+    private int _rtpFirstPort = 50000;
+    private int _rtpLastPort = 50127;
     private string _recordingDirectory = string.Empty;
     private string _bufferDirectory = string.Empty;
     private int _timeshiftMinutes = 60;
@@ -32,21 +42,29 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private Uri? _selectedDevice;
     private int _channelFilter;
     private int _volume = 75;
+    private bool _muted;
     private bool _german;
     private string _teletextPage = "100";
     private PlaybackTrack? _selectedAudioTrack;
     private PlaybackTrack? _selectedSubtitleTrack;
 
-    public MainWindowViewModel(SatIpDeviceClient devices, SsdpDiscovery discovery, IPlaybackController playback, UiText text, AppRepository? repository = null, TimeProvider? timeProvider = null)
+    public MainWindowViewModel(SatIpDeviceClient devices, SsdpDiscovery discovery, IPlaybackController playback, UiText text, IDesktopData? data = null, TimeProvider? timeProvider = null, GuideService? guideService = null, RecordingCoordinator? recordings = null, RecordingActions? recordingActions = null)
     {
         _devices = devices;
         _discovery = discovery;
         _playback = playback;
         Text = text;
-        _repository = repository;
+        _data = data;
         _clock = timeProvider ?? TimeProvider.System;
+        _guideDay = _clock.GetLocalNow();
+        _guideService = guideService;
+        _recordings = recordings;
+        _recordingActions = recordingActions;
+        InitializeRecordingEditor();
         _german = text.IsGerman;
         _statusText = Text["Ready"];
+        DiscoveryInterfaces = NetworkDiscovery.GetInterfaces(Text["DefaultInterface"]);
+        SelectedDiscoveryInterface = DiscoveryInterfaces[0];
         _playback.TracksChanged += OnPlaybackTracksChanged;
         _playback.PlaybackFailed += OnPlaybackFailed;
     }
@@ -56,6 +74,38 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     public ObservableCollection<TvChannel> Channels { get; } = [];
 
     public ObservableCollection<Uri> DiscoveredDevices { get; } = [];
+
+    public IReadOnlyList<DiscoveryInterface> DiscoveryInterfaces { get; }
+
+    public DiscoveryInterface? SelectedDiscoveryInterface
+    {
+        get => _selectedDiscoveryInterface;
+        set => SetProperty(ref _selectedDiscoveryInterface, value);
+    }
+
+    public int DefaultStartPadding
+    {
+        get => _defaultStartPadding;
+        set => SetProperty(ref _defaultStartPadding, value);
+    }
+
+    public int DefaultEndPadding
+    {
+        get => _defaultEndPadding;
+        set => SetProperty(ref _defaultEndPadding, value);
+    }
+
+    public int GuideRefreshHours
+    {
+        get => _guideRefreshHours;
+        set => SetProperty(ref _guideRefreshHours, value);
+    }
+
+    public int FreeSpaceReserveGiB
+    {
+        get => _freeSpaceReserveGiB;
+        set => SetProperty(ref _freeSpaceReserveGiB, value);
+    }
 
     public ObservableCollection<PlaybackTrack> AudioTracks { get; } = [];
 
@@ -90,7 +140,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     public TvChannel? SelectedChannel
     {
         get => _selectedChannel;
-        set => SetProperty(ref _selectedChannel, value);
+        set
+        {
+            if (SetProperty(ref _selectedChannel, value))
+            {
+                if (_timerProgramme is null || (value ?? _playback.CurrentChannel)?.ServiceIdentity != _timerProgramme.Service)
+                {
+                    ClearProgrammeLink();
+                }
+
+                FilterGuide();
+                if (_data is not null)
+                {
+                    LoadChannelGuideCommand.Execute(null);
+                }
+            }
+        }
     }
 
     public Uri? SelectedDevice
@@ -98,9 +163,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         get => _selectedDevice;
         set
         {
-            if (SetProperty(ref _selectedDevice, value) && value is not null)
+            if (SetProperty(ref _selectedDevice, value))
             {
-                DescriptorUrl = value.AbsoluteUri;
+                if (value is not null)
+                {
+                    DescriptorUrl = value.AbsoluteUri;
+                }
+
+                FilterChannels();
             }
         }
     }
@@ -124,7 +194,19 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _volume, Math.Clamp(value, 0, 100)))
             {
-                _playback.SetVolume(_volume);
+                _playback.SetVolume(Muted ? 0 : _volume);
+            }
+        }
+    }
+
+    public bool Muted
+    {
+        get => _muted;
+        set
+        {
+            if (SetProperty(ref _muted, value))
+            {
+                _playback.SetVolume(value ? 0 : Volume);
             }
         }
     }
@@ -139,6 +221,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                 Text.SetLanguage(value);
                 OnPropertyChanged(nameof(ChannelFilters));
                 OnPropertyChanged(nameof(PauseButtonText));
+                OnPropertyChanged(nameof(InstantStartModes));
+                OnPropertyChanged(nameof(FullscreenButtonText));
+                FilterGuide();
+                RefreshRecordingsCommand.Execute(null);
                 StatusText = Text["Ready"];
             }
         }
@@ -192,6 +278,24 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _startAtLogin, value);
     }
 
+    public bool RetainTransportStreams
+    {
+        get => _retainTransportStreams;
+        set => SetProperty(ref _retainTransportStreams, value);
+    }
+
+    public int RtpFirstPort
+    {
+        get => _rtpFirstPort;
+        set => SetProperty(ref _rtpFirstPort, value);
+    }
+
+    public int RtpLastPort
+    {
+        get => _rtpLastPort;
+        set => SetProperty(ref _rtpLastPort, value);
+    }
+
     public string RecordingDirectory
     {
         get => _recordingDirectory;
@@ -218,32 +322,43 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        if (_repository is null)
+        if (_data is null)
         {
             return;
         }
 
-        await _repository.InitializeAsync(cancellationToken).ConfigureAwait(true);
-        _settings = await _repository.GetSettingsAsync(cancellationToken).ConfigureAwait(true);
+        await _data.InitializeAsync(cancellationToken).ConfigureAwait(true);
+        _settings = await _data.GetSettingsAsync(cancellationToken).ConfigureAwait(true);
         if (!string.Equals(_settings.Language, "system", StringComparison.Ordinal))
         {
             German = string.Equals(_settings.Language, "de", StringComparison.Ordinal);
         }
 
         StartAtLogin = _settings.StartAtLogin;
+        RetainTransportStreams = _settings.RetainTransportStreams;
+        RtpFirstPort = _settings.RtpFirstPort;
+        RtpLastPort = _settings.RtpLastPort;
+        TimerRetainSource = _settings.RetainTransportStreams;
+        DefaultStartPadding = TimerStartPadding = (int)_settings.DefaultStartPadding.TotalMinutes;
+        DefaultEndPadding = TimerEndPadding = (int)_settings.DefaultEndPadding.TotalMinutes;
+        FreeSpaceReserveGiB = (int)(_settings.FreeSpaceReserveBytes / (1024L * 1024 * 1024));
+        GuideRefreshHours = (int)_settings.GuideRefreshInterval.TotalHours;
         RecordingDirectory = _settings.RecordingDirectory;
         BufferDirectory = _settings.BufferDirectory;
         TimeshiftMinutes = (int)_settings.TimeshiftDuration.TotalMinutes;
         TimeshiftGiB = (int)(_settings.TimeshiftBytes / (1024L * 1024 * 1024));
-        IReadOnlyList<SatIpDevice> storedDevices = await _repository.GetDevicesAsync(cancellationToken).ConfigureAwait(true);
+        IReadOnlyList<SatIpDevice> storedDevices = await _data.GetDevicesAsync(cancellationToken).ConfigureAwait(true);
+        _knownDevices.AddRange(storedDevices);
         foreach (SatIpDevice device in storedDevices)
         {
             DiscoveredDevices.Add(device.DescriptorUri);
         }
 
         SelectedDevice = storedDevices.Count > 0 ? storedDevices[0].DescriptorUri : null;
-        _allChannels.AddRange(await _repository.GetChannelsAsync(cancellationToken).ConfigureAwait(true));
+        _allChannels.AddRange(await _data.GetChannelsAsync(cancellationToken).ConfigureAwait(true));
         FilterChannels();
+        await RefreshRecordingsAsync(cancellationToken).ConfigureAwait(true);
+        await RefreshGuideCoreAsync(cancellationToken).ConfigureAwait(true);
     }
 
     public void ReportStartupError(string message) => StatusText = Text["InitializationFailed"] + " " + message;
@@ -251,31 +366,44 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ToggleFavoriteAsync(CancellationToken cancellationToken)
     {
-        if (SelectedChannel is null)
+        TvChannel? selected = SelectedChannel;
+        if (selected is null)
         {
             return;
         }
 
-        TvChannel updated = SelectedChannel with { IsFavorite = !SelectedChannel.IsFavorite };
-        int index = _allChannels.FindIndex(channel => string.Equals(channel.Id, updated.Id, StringComparison.Ordinal));
-        if (index >= 0)
+        try
         {
-            _allChannels[index] = updated;
-        }
+            TvChannel updated = selected with { IsFavorite = !selected.IsFavorite };
+            if (_data is not null)
+            {
+                await _data.SetFavoriteAsync(updated.Id, updated.IsFavorite, cancellationToken).ConfigureAwait(true);
+                updated = await _data.GetChannelAsync(updated.Id, cancellationToken).ConfigureAwait(true) ?? updated;
+            }
 
-        if (_repository is not null)
+            string? selection = SelectedChannel?.Id;
+            int index = _allChannels.FindIndex(channel => string.Equals(channel.Id, selected.Id, StringComparison.Ordinal) || string.Equals(channel.Id, updated.Id, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                _allChannels[index] = updated;
+            }
+
+            FilterChannels();
+            SelectedChannel = Channels.FirstOrDefault(channel => string.Equals(channel.Id, string.Equals(selection, selected.Id, StringComparison.Ordinal) ? updated.Id : selection, StringComparison.Ordinal));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await _repository.SetFavoriteAsync(updated.Id, updated.IsFavorite, cancellationToken).ConfigureAwait(true);
         }
-
-        FilterChannels();
-        SelectedChannel = updated;
+        catch (Exception exception)
+        {
+            StatusText = Text["FavoriteFailed"] + " " + exception.Message;
+        }
     }
 
     [RelayCommand]
     private async Task SaveSettingsAsync(CancellationToken cancellationToken)
     {
-        if (TimeshiftMinutes < 1 || TimeshiftGiB < 1 || !Path.IsPathFullyQualified(RecordingDirectory) || !Path.IsPathFullyQualified(BufferDirectory))
+        if (TimeshiftMinutes < 1 || TimeshiftGiB < 1 || DefaultStartPadding < 0 || DefaultEndPadding < 0 || FreeSpaceReserveGiB < 0 || GuideRefreshHours is < 1 or > 744 || RtpFirstPort < 1024 || RtpLastPort > 65535 || RtpFirstPort % 2 != 0 || RtpLastPort <= RtpFirstPort || !Path.IsPathFullyQualified(RecordingDirectory) || !Path.IsPathFullyQualified(BufferDirectory))
         {
             StatusText = Text["InvalidSettings"];
             return;
@@ -290,19 +418,30 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             {
                 Language = German ? "de" : "en",
                 StartAtLogin = StartAtLogin,
+                RetainTransportStreams = RetainTransportStreams,
+                RtpFirstPort = RtpFirstPort,
+                RtpLastPort = RtpLastPort,
                 RecordingDirectory = RecordingDirectory,
                 BufferDirectory = BufferDirectory,
                 TimeshiftDuration = TimeSpan.FromMinutes(TimeshiftMinutes),
                 TimeshiftBytes = checked(TimeshiftGiB * 1024L * 1024 * 1024),
+                FreeSpaceReserveBytes = checked(FreeSpaceReserveGiB * 1024L * 1024 * 1024),
+                GuideRefreshInterval = TimeSpan.FromHours(GuideRefreshHours),
+                DefaultStartPadding = TimeSpan.FromMinutes(DefaultStartPadding),
+                DefaultEndPadding = TimeSpan.FromMinutes(DefaultEndPadding),
             };
-            if (_repository is not null)
+            if (_data is not null)
             {
-                await _repository.SaveSettingsAsync(_settings, cancellationToken).ConfigureAwait(true);
+                await _data.SaveSettingsAsync(_settings, cancellationToken).ConfigureAwait(true);
             }
 
             StatusText = Text["SettingsSaved"];
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusText = Text["Ready"];
+        }
+        catch (Exception exception)
         {
             StatusText = Text["SettingsFailed"] + " " + exception.Message;
         }
@@ -326,17 +465,31 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             TvChannel[] updated = imported.Select(channel => channel with { IsFavorite = favorites.Contains(channel.Id) }).ToArray();
             _allChannels.RemoveAll(channel => channel.DeviceId == device.Id);
             _allChannels.AddRange(updated);
-            if (_repository is not null)
+            if (_data is not null)
             {
-                await _repository.SaveDeviceAsync(device, cancellationToken).ConfigureAwait(true);
-                await _repository.ReplaceDeviceChannelsAsync(device.Id, updated, cancellationToken).ConfigureAwait(true);
+                await _data.SaveDeviceAsync(device, cancellationToken).ConfigureAwait(true);
+                await _data.ReplaceDeviceChannelsAsync(device.Id, updated, cancellationToken).ConfigureAwait(true);
+                IReadOnlyList<TvChannel> channels = await _data.GetChannelsAsync(cancellationToken).ConfigureAwait(true);
                 _allChannels.Clear();
-                _allChannels.AddRange(await _repository.GetChannelsAsync(cancellationToken).ConfigureAwait(true));
+                _allChannels.AddRange(channels);
             }
+            _knownDevices.RemoveAll(item => item.Id == device.Id);
+            _knownDevices.Add(device);
+            if (!DiscoveredDevices.Contains(device.DescriptorUri))
+            {
+                DiscoveredDevices.Add(device.DescriptorUri);
+            }
+
+            SelectedDevice = device.DescriptorUri;
+            _guideService?.RequestRefresh();
             FilterChannels();
             StatusText = string.Format(CultureInfo.CurrentCulture, Text["Imported"], device.Name, imported.Count, device.TunerCount);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusText = Text["Ready"];
+        }
+        catch (Exception exception)
         {
             StatusText = Text["ImportFailed"] + " " + exception.Message;
         }
@@ -348,9 +501,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             StatusText = Text["Discovering"];
-            IReadOnlyList<Uri> devices = await _discovery.DiscoverAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(true);
+            IReadOnlyList<Uri> devices = SelectedDiscoveryInterface?.Address is null
+                ? await _discovery.DiscoverAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(true)
+                : await NetworkDiscovery.DiscoverAsync(SelectedDiscoveryInterface, cancellationToken).ConfigureAwait(true);
             DiscoveredDevices.Clear();
-            foreach (Uri uri in devices)
+            foreach (Uri uri in _knownDevices.Select(device => device.DescriptorUri).Concat(devices).Distinct())
             {
                 DiscoveredDevices.Add(uri);
             }
@@ -358,7 +513,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             SelectedDevice = devices.Count > 0 ? devices[0] : null;
             StatusText = string.Format(CultureInfo.CurrentCulture, Text["Discovered"], devices.Count);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusText = Text["Ready"];
+        }
+        catch (Exception exception)
         {
             StatusText = Text["DiscoveryFailed"] + " " + exception.Message;
         }
@@ -376,8 +535,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
+            DetailsExpanded = false;
             await _playback.PlayAsync(requested, cancellationToken).ConfigureAwait(true);
-            _playback.SetVolume(Volume);
+            _playback.SetVolume(Muted ? 0 : Volume);
             TvChannel canonical = _playback.CurrentChannel ?? requested;
             if (!string.Equals(canonical.Id, requested.Id, StringComparison.Ordinal))
             {
@@ -396,7 +556,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             StatusText = string.Format(CultureInfo.CurrentCulture, Text["Playing"], canonical.Name);
             await RefreshPlaybackAsync(cancellationToken).ConfigureAwait(true);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusText = Text["Ready"];
+        }
+        catch (Exception exception)
         {
             StatusText = Text["PlaybackFailed"] + " " + exception.Message;
         }
@@ -407,12 +571,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         PlayCommand.Cancel();
         SeekCommand.Cancel();
-        await _playback.StopAsync(cancellationToken).ConfigureAwait(true);
+        await RunPlaybackActionAsync(() => _playback.StopAsync(cancellationToken), cancellationToken).ConfigureAwait(true);
         StatusText = Text["Ready"];
     }
 
     [RelayCommand]
-    private async Task PauseAsync(CancellationToken cancellationToken) => await _playback.TogglePauseAsync(cancellationToken).ConfigureAwait(true);
+    private async Task PauseAsync(CancellationToken cancellationToken) => await RunPlaybackActionAsync(() => _playback.TogglePauseAsync(cancellationToken), cancellationToken).ConfigureAwait(true);
 
     [RelayCommand]
     private void ShowTeletext()
@@ -433,11 +597,15 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ToggleTeletextTransparency() => _playback.ToggleTeletextTransparency();
 
+    [RelayCommand]
+    private void ClearDeviceFilter() => SelectedDevice = null;
+
     private void FilterChannels()
     {
+        Guid? deviceId = _knownDevices.FirstOrDefault(device => device.DescriptorUri == SelectedDevice)?.Id;
         Channels.Clear();
         foreach (TvChannel channel in _allChannels.Where(channel =>
-            channel.Name.Contains(SearchText, StringComparison.CurrentCultureIgnoreCase) && (!FavoritesOnly || channel.IsFavorite) &&
+            (deviceId is null || channel.DeviceId == deviceId) && channel.Name.Contains(SearchText, StringComparison.CurrentCultureIgnoreCase) && (!FavoritesOnly || channel.IsFavorite) &&
             (ChannelFilter == 0 || ChannelFilter == 1 && channel.Kind == ChannelKind.Television || ChannelFilter == 2 && channel.Kind == ChannelKind.Radio)))
         {
             Channels.Add(channel);

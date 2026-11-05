@@ -2,10 +2,12 @@ namespace FritzTV.Infrastructure.Dvb;
 
 public static class PsiPacketizer
 {
-    public static byte[] Packetize(int pid, ReadOnlySpan<byte> section)
+    public static byte[] Packetize(int pid, ReadOnlySpan<byte> section, int continuity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(pid);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(pid, 8191);
+        ArgumentOutOfRangeException.ThrowIfNegative(continuity);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(continuity, 15);
         if (section.Length is < 3 or > 4096)
         {
             throw new ArgumentOutOfRangeException(nameof(section));
@@ -21,7 +23,7 @@ public static class PsiPacketizer
             packet[0] = 0x47;
             packet[1] = (byte)((pid >> 8) | (index == 0 ? 0x40 : 0));
             packet[2] = (byte)pid;
-            packet[3] = (byte)(0x10 | (index & 15));
+            packet[3] = (byte)(0x10 | ((continuity + index) & 15));
             var payload = index == 0 ? 5 : 4;
             if (index == 0)
             {

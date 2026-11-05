@@ -1,8 +1,8 @@
 using System.Globalization;
-using FritzTV.Core.Models;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
+using FritzTV.Core.Models;
 
 namespace FritzTV.Infrastructure.Transport;
 
@@ -73,6 +73,7 @@ public sealed class SatIpSession : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(firstPort));
         }
 
+        streamUri = SatIpTuning.WithPids(streamUri, SatIpTuning.Pids(streamUri));
         var (newRtp, newRtcp) = BindPair(firstPort, lastPort);
         var tcp = new TcpClient(AddressFamily.InterNetwork) { NoDelay = true };
         RtspConnection? newConnection = null;
@@ -227,7 +228,7 @@ public sealed class SatIpSession : IAsyncDisposable
         {
             await connection.SendAsync("TEARDOWN", sessionUri, sessionId, cancellationToken: timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or SocketException or OperationCanceledException)
         {
             // The transport may already have failed; all local resources still need releasing.
         }
@@ -294,7 +295,7 @@ public sealed class SatIpSession : IAsyncDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-        catch (Exception exception) when (exception is IOException or SocketException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or SocketException or InvalidOperationException)
         {
             Failure = exception;
             CompleteConsumers(exception);
@@ -317,7 +318,7 @@ public sealed class SatIpSession : IAsyncDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-        catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or SocketException or OperationCanceledException)
         {
             Failure = exception;
             CompleteConsumers(exception);

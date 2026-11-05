@@ -24,13 +24,13 @@ public sealed class SatIpDeviceClient(HttpClient httpClient)
             throw new InvalidDataException("The UPnP device is not a SAT>IP server.");
         }
 
-        var udn = Child(device, "UDN");
+        var udn = Child(device, "UDN").Trim();
         if (string.IsNullOrWhiteSpace(udn))
         {
             throw new InvalidDataException("The SAT>IP device has no UDN.");
         }
 
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(udn));
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(udn.ToLowerInvariant()));
         var id = new Guid(digest.AsSpan(0, 16));
         var baseText = document.Root?.Elements().FirstOrDefault(element => string.Equals(element.Name.LocalName, "URLBase", StringComparison.Ordinal))?.Value;
         var baseUri = string.IsNullOrWhiteSpace(baseText) ? descriptorUri : ResolveHttpUri(descriptorUri, baseText);
@@ -170,15 +170,40 @@ public sealed class SatIpDeviceClient(HttpClient httpClient)
         using var request = new HttpRequestMessage(HttpMethod.Post, controlUri);
         request.Headers.TryAddWithoutValidation("SOAPACTION", $"\"{SatIpService}#{action}\"");
         request.Content = new StringContent(body.ToString(SaveOptions.DisableFormatting), Encoding.UTF8, "text/xml");
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        return response.IsSuccessStatusCode ? ParseXml(await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false)) : null;
+        var response = await ReadResponseAsync(request, allowFailure: true, cancellationToken).ConfigureAwait(false);
+        return response is null ? null : ParseXml(response);
     }
 
     private async Task<string> ReadTextAsync(Uri uri, CancellationToken cancellationToken)
     {
-        using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        return await ReadResponseAsync(request, allowFailure: false, cancellationToken).ConfigureAwait(false) ?? string.Empty;
+    }
+
+    private async Task<string?> ReadResponseAsync(HttpRequestMessage request, bool allowFailure, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var duration = httpClient.Timeout > TimeSpan.Zero && httpClient.Timeout < TimeSpan.FromSeconds(15) ? httpClient.Timeout : TimeSpan.FromSeconds(15);
+        deadline.CancelAfter(duration);
+        try
+        {
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                if (allowFailure)
+                {
+                    return null;
+                }
+
+                response.EnsureSuccessStatusCode();
+            }
+
+            return await ReadBoundedAsync(response.Content, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && (deadline.IsCancellationRequested || exception.InnerException is TimeoutException))
+        {
+            throw new TimeoutException("The SAT>IP device did not finish its response before the request deadline.", exception);
+        }
     }
 
     private static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)

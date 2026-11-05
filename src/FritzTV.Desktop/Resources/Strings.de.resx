@@ -3,7 +3,7 @@
   <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
   <resheader name="version"><value>2.0</value></resheader>
   <data name="AppSubtitle" xml:space="preserve"><value>Fernsehen und Radio</value></data>
-  <data name="Ready" xml:space="preserve"><value>Bereit. Gerät hinzufügen oder im Netzwerk suchen.</value></data>
+  <data name="Ready" xml:space="preserve"><value>Bereit.</value></data>
   <data name="Import" xml:space="preserve"><value>Hinzufügen / aktualisieren</value></data>
   <data name="Discover" xml:space="preserve"><value>Suchen</value></data>
   <data name="DiscoveredDevices" xml:space="preserve"><value>Gefundene Geräte</value></data>
@@ -60,4 +60,74 @@
   <data name="SearchGuide" xml:space="preserve"><value>Sendungen suchen</value></data>
   <data name="RefreshGuide" xml:space="preserve"><value>Programm neu laden</value></data>
   <data name="GuideHint" xml:space="preserve"><value>Die Programmdaten hängen vom Sender ab. Einen Sender auswählen und wiedergeben, um dessen Programminformationen zu laden.</value></data>
+  <data name="Recordings" xml:space="preserve"><value>Aufnahmen und Timer</value></data>
+  <data name="Record" xml:space="preserve"><value>Aufnehmen</value></data>
+  <data name="RecordFromNow" xml:space="preserve"><value>Ab jetzt</value></data>
+  <data name="RecordFromProgramme" xml:space="preserve"><value>Gepufferter Sendungsbeginn</value></data>
+  <data name="RecordFromOldest" xml:space="preserve"><value>Ältester Pufferpunkt</value></data>
+  <data name="RecordingFailed" xml:space="preserve"><value>Aufnahmeaktion fehlgeschlagen.</value></data>
+  <data name="UntilStopped" xml:space="preserve"><value>bis zum Stoppen</value></data>
+  <data name="RecordingFileMissing" xml:space="preserve"><value>Die Aufnahmedatei ist nicht verfügbar.</value></data>
+  <data name="TimerTitle" xml:space="preserve"><value>Timername</value></data>
+  <data name="TimerStart" xml:space="preserve"><value>Beginn</value></data>
+  <data name="TimerEnd" xml:space="preserve"><value>Ende</value></data>
+  <data name="TimerPadding" xml:space="preserve"><value>Vorlauf / Nachlauf</value></data>
+  <data name="RepeatDays" xml:space="preserve"><value>Wiederholen am</value></data>
+  <data name="RepeatDaily" xml:space="preserve"><value>Täglich</value></data>
+  <data name="SaveTimer" xml:space="preserve"><value>Timer speichern</value></data>
+  <data name="TimerSaved" xml:space="preserve"><value>Timer gespeichert. Der Computer muss eingeschaltet und angemeldet bleiben.</value></data>
+  <data name="InvalidTimer" xml:space="preserve"><value>Sender, Titel und ein zukünftiges Ende nach dem Beginn sowie einen nicht negativen Vor-/Nachlauf wählen.</value></data>
+  <data name="RetainSource" xml:space="preserve"><value>Quell-TS behalten (vollständiger Teletext und Sendedaten)</value></data>
+  <data name="StopRecording" xml:space="preserve"><value>Aufnahme stoppen</value></data>
+  <data name="ExtendRecording" xml:space="preserve"><value>+10 Minuten</value></data>
+  <data name="CancelTimer" xml:space="preserve"><value>Timerserie löschen</value></data>
+  <data name="RetryFinalization" xml:space="preserve"><value>Erneut fertigstellen</value></data>
+  <data name="UseProgramme" xml:space="preserve"><value>Sendung aufnehmen</value></data>
+  <data name="RecordingHint" xml:space="preserve"><value>Für einen manuellen Timer einen Sender auswählen. Timer und Aufnahmen laufen bei geschlossenem Fenster weiter.</value></data>
+  <data name="RtpPortRange" xml:space="preserve"><value>RTP-/RTCP-Ports</value></data>
+  <data name="RestartPorts" xml:space="preserve"><value>Portänderungen gelten nach einem Neustart von FRITZ TV. Pufferänderungen gelten beim nächsten Senderstart.</value></data>
+  <data name="GuideScanning" xml:space="preserve"><value>Programmdaten werden gesucht: {0}/{1} Frequenzen</value></data>
+  <data name="GuideCoverage" xml:space="preserve"><value>{0} Sendungen · aktualisiert {1} · Abdeckung bis {2}</value></data>
+  <data name="Never" xml:space="preserve"><value>nie</value></data>
+  <data name="Unknown" xml:space="preserve"><value>unbekannt</value></data>
+  <data name="Monday" xml:space="preserve"><value>Mo</value></data>
+  <data name="Tuesday" xml:space="preserve"><value>Di</value></data>
+  <data name="Wednesday" xml:space="preserve"><value>Mi</value></data>
+  <data name="Thursday" xml:space="preserve"><value>Do</value></data>
+  <data name="Friday" xml:space="preserve"><value>Fr</value></data>
+  <data name="Saturday" xml:space="preserve"><value>Sa</value></data>
+  <data name="Sunday" xml:space="preserve"><value>So</value></data>
+  <data name="Mute" xml:space="preserve"><value>Stumm</value></data>
+  <data name="RecordingStateScheduled" xml:space="preserve"><value>Geplant</value></data>
+  <data name="RecordingStateRecording" xml:space="preserve"><value>Aufnahme läuft</value></data>
+  <data name="RecordingStateFinalizing" xml:space="preserve"><value>Wird fertiggestellt</value></data>
+  <data name="RecordingStateCompleted" xml:space="preserve"><value>Abgeschlossen</value></data>
+  <data name="RecordingStatePartial" xml:space="preserve"><value>Unvollständig</value></data>
+  <data name="RecordingStateFailed" xml:space="preserve"><value>Fehlgeschlagen</value></data>
+  <data name="RecordingStateMissed" xml:space="preserve"><value>Verpasst</value></data>
+  <data name="RecordingStateConflict" xml:space="preserve"><value>Tunerkonflikt</value></data>
+  <data name="DefaultInterface" xml:space="preserve"><value>Standard-Netzwerkschnittstelle</value></data>
+  <data name="DiscoveryInterface" xml:space="preserve"><value>Netzwerkschnittstelle für die Suche</value></data>
+  <data name="AllDevices" xml:space="preserve"><value>Alle Geräte</value></data>
+  <data name="FreeSpaceReserve" xml:space="preserve"><value>Freier Speicher als Reserve</value></data>
+  <data name="ReceptionSummary" xml:space="preserve"><value>{0} Tuner belegt · Wiedergabe: {1:N0} RTP · {2:N0} verloren</value></data>
+  <data name="SignalSummary" xml:space="preserve"><value>Signal {0}/255 · Qualität {1}/15</value></data>
+  <data name="NowNext" xml:space="preserve"><value>Jetzt: {0} · Danach: {1}</value></data>
+  <data name="GuideFailed" xml:space="preserve"><value>Programmdaten konnten nicht geladen werden.</value></data>
+  <data name="NewManualTimer" xml:space="preserve"><value>Neuer manueller Timer</value></data>
+  <data name="ChannelOrderSaved" xml:space="preserve"><value>Senderreihenfolge gespeichert.</value></data>
+  <data name="ChannelOrderFailed" xml:space="preserve"><value>Senderreihenfolge konnte nicht gespeichert werden.</value></data>
+  <data name="MoveChannelUp" xml:space="preserve"><value>Sender nach oben verschieben</value></data>
+  <data name="MoveChannelDown" xml:space="preserve"><value>Sender nach unten verschieben</value></data>
+  <data name="RewindTenSeconds" xml:space="preserve"><value>Zehn Sekunden zurückspulen</value></data>
+  <data name="GuideNow" xml:space="preserve"><value>Jetzt</value></data>
+  <data name="GuideRefreshInterval" xml:space="preserve"><value>Intervall der Programmsuche</value></data>
+  <data name="FavoriteFailed" xml:space="preserve"><value>Favorit konnte nicht geändert werden.</value></data>
+  <data name="SavedTimers" xml:space="preserve"><value>Gespeicherte Timer</value></data>
+  <data name="Once" xml:space="preserve"><value>Einmalig</value></data>
+  <data name="TimerSchedule" xml:space="preserve"><value>{0} – {1} · {2} · {3}</value></data>
+  <data name="BufferedRecordingHint" xml:space="preserve"><value>Der Sendungsbeginn wird aus Programmdaten ermittelt. Ohne diese Daten wird ab dem ältesten Pufferpunkt aufgenommen.</value></data>
+  <data name="BufferedRecordingUnavailable" xml:space="preserve"><value>Aufnahmen aus dem Puffer sind nur beim laufenden Sender möglich.</value></data>
+  <data name="TimerClockPolicy" xml:space="preserve"><value>Zeiten in einer Zeitlücke werden um die Lücke vorgerückt; doppelte Uhrzeiten verwenden das erste Vorkommen. Wiederholungen behalten ihre ursprüngliche Ortszeit.</value></data>
+  <data name="ExitFullscreen" xml:space="preserve"><value>Vollbild verlassen</value></data>
 </root>

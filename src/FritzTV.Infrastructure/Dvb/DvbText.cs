@@ -70,9 +70,20 @@ public static class DvbText
             var value = data[index];
             var accent = value switch
             {
-                0xc1 => '\u0300', 0xc2 => '\u0301', 0xc3 => '\u0302', 0xc4 => '\u0303',
-                0xc5 => '\u0304', 0xc6 => '\u0306', 0xc7 => '\u0307', 0xc8 => '\u0308',
-                0xca => '\u030a', 0xcb => '\u0327', 0xcd => '\u030b', 0xce => '\u0328', 0xcf => '\u030c', _ => '\0',
+                0xc1 => '\u0300',
+                0xc2 => '\u0301',
+                0xc3 => '\u0302',
+                0xc4 => '\u0303',
+                0xc5 => '\u0304',
+                0xc6 => '\u0306',
+                0xc7 => '\u0307',
+                0xc8 => '\u0308',
+                0xca => '\u030a',
+                0xcb => '\u0327',
+                0xcd => '\u030b',
+                0xce => '\u0328',
+                0xcf => '\u030c',
+                _ => '\0',
             };
             if (accent != '\0' && index + 1 < data.Length && data[index + 1] != 0x20)
             {

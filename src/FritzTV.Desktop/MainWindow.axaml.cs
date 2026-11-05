@@ -1,7 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Interactivity;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using FritzTV.Desktop.Services;
 using FritzTV.Desktop.ViewModels;
@@ -18,6 +18,23 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Opened += (_, _) => FitWorkArea();
+        PropertyChanged += (_, args) =>
+        {
+            if (args.Property == WindowStateProperty && DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.IsFullscreen = WindowState == WindowState.FullScreen;
+            }
+        };
+        TimelineSlider.AddHandler(PointerPressedEvent, OnTimelinePressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        TimelineSlider.AddHandler(PointerReleasedEvent, OnTimelineReleased, RoutingStrategies.Bubble, handledEventsToo: true);
+        KeyDown += (_, args) =>
+        {
+            if (args.Key == Key.Escape && WindowState == WindowState.FullScreen)
+            {
+                WindowState = WindowState.Normal;
+                args.Handled = true;
+            }
+        };
     }
 
     public MainWindow(MainWindowViewModel viewModel, LibVlcPlaybackController player)
@@ -35,6 +52,14 @@ public sealed partial class MainWindow : Window
     }
 
     public event EventHandler? QuitRequested;
+
+    public void DetachPlayer()
+    {
+        if (_videoView is not null)
+        {
+            _videoView.MediaPlayer = null;
+        }
+    }
 
     private void FitWorkArea()
     {
@@ -74,6 +99,7 @@ public sealed partial class MainWindow : Window
         _videoView.MediaPlayer = _player?.NativePlayer;
         _videoView.IsVisible = true;
         VideoHost.Content = _videoView;
+        UpdateLayout();
     }
 
     private void OnNativeOutputChanged(object? sender, EventArgs args)
@@ -96,11 +122,55 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnTimelineReleased(object? sender, PointerReleasedEventArgs args)
+    private void OnTimelineReleased(object? sender, PointerReleasedEventArgs args)
     {
         if (DataContext is MainWindowViewModel viewModel)
         {
+            viewModel.SeekCommand.Execute(null);
+        }
+    }
+
+    private async void OnTimelineKeyUp(object? sender, KeyEventArgs args)
+    {
+        if (args.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown && DataContext is MainWindowViewModel viewModel)
+        {
             await viewModel.SeekCommand.ExecuteAsync(null).ConfigureAwait(true);
+        }
+    }
+
+    private void OnGuideNowClick(object? sender, RoutedEventArgs args)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.ShowGuideToday();
+            OnDetailsExpanded(sender, args);
+        }
+    }
+
+    private void OnDetailsExpanded(object? sender, RoutedEventArgs args)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                GuideTimelineScroller.Offset = new Vector(viewModel.GuideNowOffset, 0);
+            }
+        }, DispatcherPriority.Loaded);
+    }
+
+    private void OnDetailsTabChanged(object? sender, SelectionChangedEventArgs args)
+    {
+        if (sender is TabControl { SelectedIndex: 0 } && ReferenceEquals(sender, args.Source))
+        {
+            OnDetailsExpanded(sender, args);
+        }
+    }
+
+    private void OnProgrammeTimelineClick(object? sender, RoutedEventArgs args)
+    {
+        if (sender is Control { DataContext: ProgrammeItem programme } && DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.SelectedProgramme = programme;
         }
     }
 

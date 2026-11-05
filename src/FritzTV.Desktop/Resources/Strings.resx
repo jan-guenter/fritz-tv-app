@@ -3,7 +3,7 @@
   <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
   <resheader name="version"><value>2.0</value></resheader>
   <data name="AppSubtitle" xml:space="preserve"><value>Television and radio</value></data>
-  <data name="Ready" xml:space="preserve"><value>Ready. Add a device or discover your network.</value></data>
+  <data name="Ready" xml:space="preserve"><value>Ready.</value></data>
   <data name="Import" xml:space="preserve"><value>Add / refresh</value></data>
   <data name="Discover" xml:space="preserve"><value>Discover</value></data>
   <data name="DiscoveredDevices" xml:space="preserve"><value>Discovered devices</value></data>
@@ -56,8 +56,78 @@
   <data name="BufferExpired" xml:space="preserve"><value>The paused point expired. Resume will start at the oldest retained point.</value></data>
   <data name="ReceptionFailed" xml:space="preserve"><value>Reception failed.</value></data>
   <data name="Guide" xml:space="preserve"><value>Programme guide</value></data>
-  <data name="GuideAndSettings" xml:space="preserve"><value>Programme guide and settings</value></data>
+  <data name="GuideAndSettings" xml:space="preserve"><value>Guide, recordings and settings</value></data>
   <data name="SearchGuide" xml:space="preserve"><value>Search programmes</value></data>
   <data name="RefreshGuide" xml:space="preserve"><value>Reload guide</value></data>
   <data name="GuideHint" xml:space="preserve"><value>Guide coverage depends on the broadcaster. Select and play a channel to collect its programme information.</value></data>
+  <data name="Recordings" xml:space="preserve"><value>Recordings and timers</value></data>
+  <data name="Record" xml:space="preserve"><value>Record</value></data>
+  <data name="RecordFromNow" xml:space="preserve"><value>From now</value></data>
+  <data name="RecordFromProgramme" xml:space="preserve"><value>Retained programme start</value></data>
+  <data name="RecordFromOldest" xml:space="preserve"><value>Oldest retained point</value></data>
+  <data name="RecordingFailed" xml:space="preserve"><value>Recording action failed.</value></data>
+  <data name="UntilStopped" xml:space="preserve"><value>until stopped</value></data>
+  <data name="RecordingFileMissing" xml:space="preserve"><value>The recording file is unavailable.</value></data>
+  <data name="TimerTitle" xml:space="preserve"><value>Timer title</value></data>
+  <data name="TimerStart" xml:space="preserve"><value>Start</value></data>
+  <data name="TimerEnd" xml:space="preserve"><value>End</value></data>
+  <data name="TimerPadding" xml:space="preserve"><value>Padding before / after</value></data>
+  <data name="RepeatDays" xml:space="preserve"><value>Repeat on</value></data>
+  <data name="RepeatDaily" xml:space="preserve"><value>Daily</value></data>
+  <data name="SaveTimer" xml:space="preserve"><value>Save timer</value></data>
+  <data name="TimerSaved" xml:space="preserve"><value>Timer saved. The computer must remain awake and logged in.</value></data>
+  <data name="InvalidTimer" xml:space="preserve"><value>Choose a channel, title and a future end after the start, with nonnegative padding.</value></data>
+  <data name="RetainSource" xml:space="preserve"><value>Keep source TS (full teletext and broadcast data)</value></data>
+  <data name="StopRecording" xml:space="preserve"><value>Stop recording</value></data>
+  <data name="ExtendRecording" xml:space="preserve"><value>+10 minutes</value></data>
+  <data name="CancelTimer" xml:space="preserve"><value>Cancel timer series</value></data>
+  <data name="RetryFinalization" xml:space="preserve"><value>Retry finalization</value></data>
+  <data name="UseProgramme" xml:space="preserve"><value>Create programme timer</value></data>
+  <data name="RecordingHint" xml:space="preserve"><value>Select a channel for a manual timer. Closing the window keeps timers and recordings running.</value></data>
+  <data name="RtpPortRange" xml:space="preserve"><value>RTP / RTCP ports</value></data>
+  <data name="RestartPorts" xml:space="preserve"><value>Port changes apply after restarting FRITZ TV. Buffer changes apply at the next channel start.</value></data>
+  <data name="GuideScanning" xml:space="preserve"><value>Scanning guide: {0}/{1} frequencies</value></data>
+  <data name="GuideCoverage" xml:space="preserve"><value>{0} programmes · updated {1} · coverage until {2}</value></data>
+  <data name="Never" xml:space="preserve"><value>never</value></data>
+  <data name="Unknown" xml:space="preserve"><value>unknown</value></data>
+  <data name="Monday" xml:space="preserve"><value>Mon</value></data>
+  <data name="Tuesday" xml:space="preserve"><value>Tue</value></data>
+  <data name="Wednesday" xml:space="preserve"><value>Wed</value></data>
+  <data name="Thursday" xml:space="preserve"><value>Thu</value></data>
+  <data name="Friday" xml:space="preserve"><value>Fri</value></data>
+  <data name="Saturday" xml:space="preserve"><value>Sat</value></data>
+  <data name="Sunday" xml:space="preserve"><value>Sun</value></data>
+  <data name="Mute" xml:space="preserve"><value>Mute</value></data>
+  <data name="RecordingStateScheduled" xml:space="preserve"><value>Scheduled</value></data>
+  <data name="RecordingStateRecording" xml:space="preserve"><value>Recording</value></data>
+  <data name="RecordingStateFinalizing" xml:space="preserve"><value>Finalizing</value></data>
+  <data name="RecordingStateCompleted" xml:space="preserve"><value>Completed</value></data>
+  <data name="RecordingStatePartial" xml:space="preserve"><value>Partial</value></data>
+  <data name="RecordingStateFailed" xml:space="preserve"><value>Failed</value></data>
+  <data name="RecordingStateMissed" xml:space="preserve"><value>Missed</value></data>
+  <data name="RecordingStateConflict" xml:space="preserve"><value>Tuner conflict</value></data>
+  <data name="DefaultInterface" xml:space="preserve"><value>Default network interface</value></data>
+  <data name="DiscoveryInterface" xml:space="preserve"><value>Discovery network interface</value></data>
+  <data name="AllDevices" xml:space="preserve"><value>All devices</value></data>
+  <data name="FreeSpaceReserve" xml:space="preserve"><value>Free-space reserve</value></data>
+  <data name="ReceptionSummary" xml:space="preserve"><value>{0} tuners in use · viewing: {1:N0} RTP · {2:N0} lost</value></data>
+  <data name="SignalSummary" xml:space="preserve"><value>signal {0}/255 · quality {1}/15</value></data>
+  <data name="NowNext" xml:space="preserve"><value>Now: {0} · Next: {1}</value></data>
+  <data name="GuideFailed" xml:space="preserve"><value>Could not load the programme guide.</value></data>
+  <data name="NewManualTimer" xml:space="preserve"><value>New manual timer</value></data>
+  <data name="ChannelOrderSaved" xml:space="preserve"><value>Channel order saved.</value></data>
+  <data name="ChannelOrderFailed" xml:space="preserve"><value>Could not save channel order.</value></data>
+  <data name="MoveChannelUp" xml:space="preserve"><value>Move channel up</value></data>
+  <data name="MoveChannelDown" xml:space="preserve"><value>Move channel down</value></data>
+  <data name="RewindTenSeconds" xml:space="preserve"><value>Rewind ten seconds</value></data>
+  <data name="GuideNow" xml:space="preserve"><value>Now</value></data>
+  <data name="GuideRefreshInterval" xml:space="preserve"><value>Guide refresh interval</value></data>
+  <data name="FavoriteFailed" xml:space="preserve"><value>Could not update the favourite.</value></data>
+  <data name="SavedTimers" xml:space="preserve"><value>Saved timers</value></data>
+  <data name="Once" xml:space="preserve"><value>Once</value></data>
+  <data name="TimerSchedule" xml:space="preserve"><value>{0} – {1} · {2} · {3}</value></data>
+  <data name="BufferedRecordingHint" xml:space="preserve"><value>Programme start uses guide data and falls back to the oldest retained point when unavailable.</value></data>
+  <data name="BufferedRecordingUnavailable" xml:space="preserve"><value>Retained content can only be recorded from the currently playing channel.</value></data>
+  <data name="TimerClockPolicy" xml:space="preserve"><value>Times in a clock gap move forward by the gap; ambiguous times use the first occurrence. Recurring timers retain their original local time.</value></data>
+  <data name="ExitFullscreen" xml:space="preserve"><value>Exit fullscreen</value></data>
 </root>

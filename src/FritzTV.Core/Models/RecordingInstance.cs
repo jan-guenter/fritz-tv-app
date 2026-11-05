@@ -11,4 +11,5 @@ public sealed record RecordingInstance(
     RecordingState State,
     string? SourcePath = null,
     string? OutputPath = null,
-    string? Error = null);
+    string? Error = null,
+    bool NeedsRecovery = false);

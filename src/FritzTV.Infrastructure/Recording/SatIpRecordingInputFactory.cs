@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using FritzTV.Core.Models;
-using FritzTV.Infrastructure.Dvb;
 using FritzTV.Infrastructure.Persistence;
 using FritzTV.Infrastructure.Playback;
 using FritzTV.Infrastructure.Transport;
@@ -68,106 +67,39 @@ public sealed class SatIpRecordingInputFactory(AppRepository repository, SatIpSe
     {
         private readonly ChannelLease lease;
         private readonly long initialLost;
-        private readonly PsiSectionAssembler sections = new();
-        private readonly HashSet<int> pmtPids = [];
-        private ProgrammeMap? programme;
-        private byte[]? pat;
-        private byte[]? pmt;
+        private readonly RecordingStreamStart start;
 
         public DirectInput(ChannelLease lease)
         {
             this.lease = lease;
             initialLost = lease.Session.LostPackets;
-            ServiceId = lease.Channel.ServiceId;
-            sections.SectionReceived += OnSectionReceived;
+            start = new RecordingStreamStart(lease.Channel.Kind, lease.Channel.ServiceId);
         }
 
-        public int? ServiceId { get; private set; }
+        public int? ServiceId => start.ServiceId;
 
         public long LostPackets => Math.Max(0, lease.Session.LostPackets - initialLost);
 
         public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadAllAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            var started = false;
+            IReadOnlySet<int>? applied = null;
             await foreach (var batch in lease.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                Inspect(batch);
-                if (!started)
+                var parts = start.Push(batch);
+                if (start.RequiredPids is { } requested && !ReferenceEquals(applied, requested))
                 {
-                    var offset = FindEntryPoint(batch);
-                    if (offset is null || pat is null || pmt is null || programme is null)
-                    {
-                        continue;
-                    }
-
-                    yield return PsiPacketizer.Packetize(0, pat);
-                    yield return PsiPacketizer.Packetize(programme.PmtPid, pmt);
-                    started = true;
-                    yield return batch[offset.Value..];
+                    await lease.UpdatePidsAsync(requested, cancellationToken).ConfigureAwait(false);
+                    applied = requested;
                 }
-                else
+
+                foreach (var part in parts)
                 {
-                    yield return batch;
+                    yield return part;
                 }
             }
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            sections.SectionReceived -= OnSectionReceived;
-            await lease.DisposeAsync().ConfigureAwait(false);
-        }
-
-        private void Inspect(ReadOnlyMemory<byte> batch)
-        {
-            for (var offset = 0; offset + 188 <= batch.Length; offset += 188)
-            {
-                var packet = batch.Span.Slice(offset, 188);
-                if (TsPacket.TryParse(packet, out var ts) && (ts.Pid == 0 || pmtPids.Contains(ts.Pid)))
-                {
-                    sections.Push(packet);
-                }
-            }
-        }
-
-        private int? FindEntryPoint(ReadOnlyMemory<byte> batch)
-        {
-            if (programme is null)
-            {
-                return null;
-            }
-
-            var video = programme.Streams.FirstOrDefault(item => item.StreamType is 0x01 or 0x02 or 0x10 or 0x1b or 0x24)?.Pid;
-            for (var offset = 0; offset + 188 <= batch.Length; offset += 188)
-            {
-                if (TsPacket.TryParse(batch.Span.Slice(offset, 188), out var packet) && packet.StartsPayload
-                    && (lease.Channel.Kind == ChannelKind.Radio ? packet.Pid == programme.PcrPid : packet.Pid == video && packet.RandomAccess))
-                {
-                    return offset;
-                }
-            }
-
-            return null;
-        }
-
-        private void OnSectionReceived(object? sender, PsiSectionEventArgs section)
-        {
-            if (section.Data.Span[0] == 0)
-            {
-                pat = section.Data.ToArray();
-                foreach (var pair in ProgrammeMapParser.ParsePat(section.Data.Span))
-                {
-                    pmtPids.Add(pair.Value);
-                }
-            }
-            else if (section.Data.Span[0] == 2 && ProgrammeMapParser.ParsePmt(section.Pid, section.Data.Span) is { } map
-                && (lease.Channel.ServiceId is null || lease.Channel.ServiceId == map.ServiceId))
-            {
-                ServiceId = map.ServiceId;
-                programme = map;
-                pmt = section.Data.ToArray();
-            }
-        }
+        public ValueTask DisposeAsync() => lease.DisposeAsync();
     }
 
     private sealed class BufferedInput : IRecordingInput

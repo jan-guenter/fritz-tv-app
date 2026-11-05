@@ -31,6 +31,21 @@ public static class ScheduleCalculator
         return new DateTimeOffset(localTime, offset).ToUniversalTime();
     }
 
+    public static (DateTimeOffset Start, DateTimeOffset End) ResolveLocalInterval(DateTime start, DateTime end, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        start = DateTime.SpecifyKind(start, DateTimeKind.Unspecified);
+        end = DateTime.SpecifyKind(end, DateTimeKind.Unspecified);
+        if (end <= start)
+        {
+            throw new ArgumentException("The local recording end must follow its start.", nameof(end));
+        }
+
+        var resolvedStart = ResolveLocal(start, zone);
+        var gapShift = TimeZoneInfo.ConvertTime(resolvedStart, zone).DateTime - start;
+        return (resolvedStart, ResolveLocal(end + gapShift, zone));
+    }
+
     public static IReadOnlyList<RecordingInstance> Expand(RecordingDefinition definition, DateTimeOffset from, DateTimeOffset until, DateTimeOffset created)
     {
         ArgumentNullException.ThrowIfNull(definition);
@@ -52,8 +67,13 @@ public static class ScheduleCalculator
         }
 
         var zone = TimeZoneInfo.FindSystemTimeZoneById(definition.TimeZoneId);
-        var localStart = TimeZoneInfo.ConvertTime(definition.Start, zone).DateTime;
-        var localEnd = TimeZoneInfo.ConvertTime(definition.End, zone).DateTime;
+        if (definition.RecurrenceLocalStart.HasValue != definition.RecurrenceLocalEnd.HasValue)
+        {
+            throw new ArgumentException("Both original local recurrence endpoints must be supplied together.", nameof(definition));
+        }
+
+        var localStart = DateTime.SpecifyKind(definition.RecurrenceLocalStart ?? TimeZoneInfo.ConvertTime(definition.Start, zone).DateTime, DateTimeKind.Unspecified);
+        var localEnd = DateTime.SpecifyKind(definition.RecurrenceLocalEnd ?? TimeZoneInfo.ConvertTime(definition.End, zone).DateTime, DateTimeKind.Unspecified);
         var wallDuration = localEnd - localStart;
         var firstDate = TimeZoneInfo.ConvertTime(from - definition.EffectiveEndPadding - (definition.End - definition.Start), zone).Date;
         var lastDate = TimeZoneInfo.ConvertTime(until + definition.EffectiveStartPadding, zone).Date;
@@ -70,7 +90,8 @@ public static class ScheduleCalculator
                 continue;
             }
 
-            Add(ResolveLocal(start, zone), ResolveLocal(start + wallDuration, zone));
+            var interval = ResolveLocalInterval(start, start + wallDuration, zone);
+            Add(interval.Start, interval.End);
         }
 
         return result;

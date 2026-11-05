@@ -12,6 +12,8 @@ staging="$(mktemp -d)"
 trap 'rm -rf -- "$staging"' EXIT
 mkdir -p "$output" "$staging/opt/fritz-tv" "$staging/DEBIAN" "$staging/usr/share/applications" "$staging/usr/share/icons/hicolor/32x32/apps" "$staging/usr/share/doc/fritz-tv"
 dotnet publish "$repository/src/FritzTV.Desktop" -c Release -r linux-x64 --self-contained true --no-restore -p:Version="$version" -o "$staging/opt/fritz-tv"
+python3 "$repository/packaging/collect-licenses.py" "$repository/src/FritzTV.Desktop/obj/project.assets.json" "$staging/opt/fritz-tv/licenses" --runtime linux-x64
+install -m 644 "$repository/THIRD-PARTY-NOTICES.md" "$staging/opt/fritz-tv/THIRD-PARTY-NOTICES.md"
 cat > "$staging/DEBIAN/control" <<CONTROL
 Package: fritz-tv
 Version: $version

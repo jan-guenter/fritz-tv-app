@@ -11,7 +11,9 @@ public sealed record RecordingDefinition(
     TimeSpan? StartPadding = null,
     TimeSpan? EndPadding = null,
     ushort? EventId = null,
-    bool RetainTransportStream = false)
+    bool RetainTransportStream = false,
+    DateTime? RecurrenceLocalStart = null,
+    DateTime? RecurrenceLocalEnd = null)
 {
     public TimeSpan EffectiveStartPadding => StartPadding ?? TimeSpan.FromMinutes(2);
 

@@ -23,7 +23,7 @@ public static class SdtParser
             }
 
             var text = ReadServiceDescriptor(section.Slice(position + 5, descriptorLength));
-            services.Add(new DvbServiceInfo(BinaryPrimitives.ReadUInt16BigEndian(section.Slice(position, 2)), text.Type, text.Name, text.Provider, (section[position + 3] & 0x10) != 0));
+            services.Add(new DvbServiceInfo(BinaryPrimitives.ReadUInt16BigEndian(section.Slice(position, 2)), text.Type, text.Name, text.Provider, (section[position + 3] & 0x10) != 0, (section[position + 2] & 2) != 0, (section[position + 2] & 1) != 0));
             position += 5 + descriptorLength;
         }
 

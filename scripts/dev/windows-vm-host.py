@@ -4,6 +4,7 @@
 Uses Python's standard library. No VM/host changes happen without an explicit
 subcommand. SSH host-key verification stays enabled; credentials are never read.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,10 +13,10 @@ import getpass
 import ipaddress
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 RULE_PREFIX = "fritz-tv-rtp-"
 
@@ -41,8 +42,7 @@ def forwarding_changes(
     current: dict[str, tuple[str, ...]], source: str | None, guest: str, remove: bool = False
 ) -> list[tuple[str, str]]:
     if remove:
-        return [("delete", f"{RULE_PREFIX}{port}") for port in range(50000, 50032)
-                if f"{RULE_PREFIX}{port}" in current]
+        return [("delete", f"{RULE_PREFIX}{port}") for port in range(50000, 50032) if f"{RULE_PREFIX}{port}" in current]
     address = ipaddress.IPv4Address(source)
     target = ipaddress.IPv4Address(guest)
     if address.is_unspecified or address.is_loopback or address.is_multicast:
@@ -61,10 +61,10 @@ def forwarding_changes(
     return changes
 
 
-
 def ensure_management_context(proc_root: Path = Path("/proc"), ipc_directory: Path | None = None) -> None:
     """Refuse a private/stale IPC path before VBoxManage can start another service."""
-    directory = ipc_directory or Path("/tmp") / f".vbox-{getpass.getuser()}-ipc"
+    # VirtualBox defines this IPC location; its lock ownership and inode are inspected below.
+    directory = ipc_directory or Path("/tmp") / f".vbox-{getpass.getuser()}-ipc"  # noqa: S108
     try:
         current = (directory / "lock").stat()
     except FileNotFoundError:
@@ -83,10 +83,16 @@ def ensure_management_context(proc_root: Path = Path("/proc"), ipc_directory: Pa
                 if "/.vbox-" not in target or not target.endswith(("/lock", "/lock (deleted)")):
                     continue
                 if target.endswith(" (deleted)") or current is None:
-                    raise ValueError("Live VBoxSVC has an unavailable IPC lock; repair the host management context before running VBoxManage")
+                    raise ValueError(
+                        "Live VBoxSVC has an unavailable IPC lock; "
+                        "repair the host management context before running VBoxManage"
+                    )
                 original = descriptor.stat()
                 if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
-                    raise ValueError("Live VBoxSVC and the current IPC directory use different locks; refusing to start another management service")
+                    raise ValueError(
+                        "Live VBoxSVC and the current IPC directory use different locks; "
+                        "refusing to start another management service"
+                    )
         except (FileNotFoundError, ProcessLookupError):
             continue
 
@@ -94,7 +100,8 @@ def ensure_management_context(proc_root: Path = Path("/proc"), ipc_directory: Pa
 def run(arguments: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
     if Path(arguments[0]).name == "VBoxManage":
         ensure_management_context()
-    return subprocess.run(arguments, check=True, text=True, capture_output=capture)
+    # All callers pass structured internal executable/argument lists, with no shell expansion.
+    return subprocess.run(arguments, check=True, text=True, capture_output=capture, shell=False)  # noqa: S603
 
 
 def discover_route(destination: str) -> str:
@@ -135,17 +142,43 @@ def tunnel(args: argparse.Namespace) -> None:
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     state.chmod(0o700)
     socket = state / "ssh-control"
-    base = ["ssh", "-p", str(args.ssh_port), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-S", str(socket)]
+    base = [
+        "ssh",
+        "-p",
+        str(args.ssh_port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-S",
+        str(socket),
+    ]
     target = f"{args.user}@127.0.0.1"
     if args.command == "stop-tunnel":
-        run(base + ["-O", "exit", target])
+        run([*base, "-O", "exit", target])
         return
-    check = subprocess.run(base + ["-O", "check", target], text=True, capture_output=True, check=False)
+    # The SSH executable and options are constructed above; user values remain separate arguments.
+    check = subprocess.run([*base, "-O", "check", target], text=True, capture_output=True, check=False, shell=False)  # noqa: S603
     if check.returncode == 0:
         print("The managed SSH tunnel is already running.")
         return
-    run(base + ["-f", "-N", "-M", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
-        "-L", f"127.0.0.1:{args.local_port}:127.0.0.1:{args.guest_port}", target])
+    run(
+        [
+            *base,
+            "-f",
+            "-N",
+            "-M",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-L",
+            f"127.0.0.1:{args.local_port}:127.0.0.1:{args.guest_port}",
+            target,
+        ]
+    )
     print(f"MCP tunnel: http://127.0.0.1:{args.local_port}/mcp/")
 
 

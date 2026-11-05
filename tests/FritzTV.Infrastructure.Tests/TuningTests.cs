@@ -12,12 +12,13 @@ public sealed class TuningTests
         var rewritten = SatIpTuning.WithPids(original, SatIpTuning.Pids(original));
         Assert.Contains("pids=0,16,17,18,20,5100,5101", rewritten.AbsoluteUri, StringComparison.Ordinal);
         Assert.DoesNotContain("%2C", rewritten.AbsoluteUri, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("avm=", rewritten.Query, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void TuningKeyExcludesPidSelectionButRetainsFrequency()
     {
-        var first = new Uri("rtsp://192.0.2.1/?freq=386&msys=dvbc&pids=0,18,100");
+        var first = new Uri("rtsp://192.0.2.1/?avm=1&freq=386&msys=dvbc&pids=0,18,100");
         var sameMultiplex = new Uri("rtsp://192.0.2.1/?msys=dvbc&freq=386&pids=0,18,200");
         var otherMultiplex = new Uri("rtsp://192.0.2.1/?freq=450&msys=dvbc&pids=0,18,100");
         Assert.Equal(SatIpTuning.Key(first), SatIpTuning.Key(sameMultiplex), StringComparer.Ordinal);

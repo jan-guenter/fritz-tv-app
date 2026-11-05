@@ -8,7 +8,8 @@ using Xunit;
 
 namespace FritzTV.Desktop.Tests;
 
-public sealed class MainWindowTests(HeadlessFixture fixture) : IClassFixture<HeadlessFixture>
+[Collection("Headless")]
+public sealed class MainWindowTests(HeadlessFixture fixture)
 {
     [Fact]
     public async Task InvalidDescriptorIsRejectedBeforeNetworkAccess()

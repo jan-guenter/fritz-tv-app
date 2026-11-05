@@ -24,6 +24,8 @@ public interface IPlaybackController
 
     PlaybackSnapshot? GetSnapshot();
 
+    ReceptionSnapshot Reception { get; }
+
     IReadOnlyList<Programme> Guide { get; }
 
     TvChannel? CurrentChannel { get; }

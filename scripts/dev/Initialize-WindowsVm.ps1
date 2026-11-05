@@ -7,6 +7,12 @@
     The host must take a VM snapshot first. No Windows autologon is configured.
     Machine-local credentials and reports are stored outside the repository.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'WorkspaceRoot', Justification = 'This script-scoped option is consumed by Write-Verification and runner helpers; the analyzer does not traverse those helper scopes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AllowedRtpSources', Justification = 'This script-scoped option is consumed by Set-RtpFirewall; the analyzer does not traverse those helper scopes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'McpPort', Justification = 'This script-scoped option is consumed by Set-Mcp and Write-Verification; the analyzer does not traverse those helper scopes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RunnerTokenPath', Justification = 'This script-scoped option is consumed by Set-InteractiveRunner; the analyzer does not traverse those helper scopes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RunnerDirectory', Justification = 'This script-scoped option is consumed by runner configuration helpers; the analyzer does not traverse those helper scopes.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepositoryUrl', Justification = 'This script-scoped option is consumed by Set-InteractiveRunner; the analyzer does not traverse those helper scopes.')]
 [CmdletBinding()]
 param(
     [string]$ConfigurationPath,
@@ -39,6 +45,8 @@ if ($configuration.schemaVersion -ne 1) { throw 'Unsupported Windows toolchain s
 $utf8 = New-Object Text.UTF8Encoding($false)
 
 function Update-ProcessPath {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Refreshes only this process environment so verification resolves installed tools; it makes no persistent machine or user changes.')]
+    param()
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
     $additional = @(
@@ -81,7 +89,7 @@ function Protect-LocalFile([string]$Path) {
 function Install-WinGetPackage([object]$Package) {
     $winget = Find-Tool 'winget.exe'
     if (-not $winget) { throw 'WinGet/App Installer must be available for the interactive user.' }
-    Write-Host ('Installing/verifying {0} {1}' -f $Package.id, $Package.version)
+    Write-Information ('Installing/verifying {0} {1}' -f $Package.id, $Package.version) -InformationAction Continue
     $arguments = @('install', '--id', $Package.id, '--exact', '--version', $Package.version,
         '--source', 'winget', '--silent', '--accept-package-agreements',
         '--accept-source-agreements', '--disable-interactivity')
@@ -98,6 +106,8 @@ function Install-WinGetPackage([object]$Package) {
 }
 
 function Set-RtpFirewall {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Private Windows bootstrap phase; the explicit top-level setup branch authorizes changes and VerifyOnly never calls this configuration helper.')]
+    param()
     $name = 'FritzTvVmRtp'
     $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
     if ($existing) {
@@ -112,6 +122,8 @@ function Set-RtpFirewall {
 }
 
 function Set-Mcp {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Private Windows bootstrap phase; the explicit top-level setup branch authorizes changes and VerifyOnly never calls this configuration helper.')]
+    param()
     $uv = Find-Tool 'uv.exe'
     if (-not $uv) { throw 'uv was not found after installation.' }
     Invoke-Native $uv @('python', 'install', $configuration.pythonVersion)
@@ -162,10 +174,12 @@ auth_key = "$secret"
     $task = Get-ScheduledTask -TaskName 'windows-mcp-server' -ErrorAction Stop
     if ($changed -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName $task.TaskName; $task = Get-ScheduledTask -TaskName $task.TaskName }
     if ($task.State -ne 'Running') { Start-ScheduledTask -TaskName $task.TaskName }
-    Write-Host ('MCP configured on guest loopback port {0}. Token is stored locally; it is not printed.' -f $McpPort)
+    Write-Information ('MCP configured on guest loopback port {0}. Token is stored locally; it is not printed.' -f $McpPort) -InformationAction Continue
 }
 
 function Set-RunnerAdmissionGuard {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Private Windows bootstrap phase; the explicit top-level setup branch authorizes changes and VerifyOnly never calls this configuration helper.')]
+    param()
     $source = Join-Path $PSScriptRoot 'Assert-TrustedWindowsJob.ps1'
     $tests = Join-Path $PSScriptRoot 'Test-TrustedWindowsJob.ps1'
     if (-not (Test-Path -LiteralPath $source) -or -not (Test-Path -LiteralPath $tests)) {
@@ -195,6 +209,8 @@ function Set-RunnerAdmissionGuard {
 }
 
 function Set-InteractiveRunner {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Private Windows bootstrap phase; the explicit top-level setup branch authorizes changes and VerifyOnly never calls this configuration helper.')]
+    param()
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     if (Get-Process -Name 'Runner.Worker' -ErrorAction SilentlyContinue) {
         throw 'A runner job is active; finish it before reconfiguring runner admission.'
@@ -312,7 +328,7 @@ function Write-VerificationReport {
     }
     $path = Join-Path $StateDirectory 'verification.json'
     [IO.File]::WriteAllText($path, ($report | ConvertTo-Json -Depth 10), $utf8)
-    Write-Host ('Verification report: {0}' -f $path)
+    Write-Information ('Verification report: {0}' -f $path) -InformationAction Continue
     return $report
 }
 

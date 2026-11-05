@@ -35,5 +35,9 @@ Source: "..\LICENSE"; DestDir: "{app}"
 Name: "{group}\FRITZ TV"; Filename: "{app}\FritzTV.Desktop.exe"
 Name: "{group}\Uninstall FRITZ TV"; Filename: "{uninstallexe}"
 
+[Registry]
+; The application manages this value; installation leaves its setting unchanged.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "FritzTV"; Flags: dontcreatekey uninsdeletevalue
+
 [Run]
 Filename: "{app}\FritzTV.Desktop.exe"; Description: "Launch FRITZ TV"; Flags: nowait postinstall skipifsilent

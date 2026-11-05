@@ -1,8 +1,9 @@
 """Regression tests for the scoped, idempotent VirtualBox forwarding planner."""
+
 import importlib.util
-from pathlib import Path
-import unittest
 import tempfile
+import unittest
+from pathlib import Path
 
 PATH = Path(__file__).resolve().parents[2] / "scripts/dev/windows-vm-host.py"
 SPEC = importlib.util.spec_from_file_location("windows_vm_host", PATH)
@@ -26,21 +27,25 @@ class ForwardingTests(unittest.TestCase):
         self.assertEqual([], HOST.forwarding_changes(existing, "192.168.0.205", "10.0.2.15"))
 
     def test_route_change_replaces_only_owned_rules(self):
-        existing = {"fritz-tv-rtp-50000": ("fritz-tv-rtp-50000", "udp", "192.168.0.204", "50000", "10.0.2.15", "50000"),
-                    "ssh": ("ssh", "tcp", "127.0.0.1", "2222", "", "22")}
+        existing = {
+            "fritz-tv-rtp-50000": ("fritz-tv-rtp-50000", "udp", "192.168.0.204", "50000", "10.0.2.15", "50000"),
+            "ssh": ("ssh", "tcp", "127.0.0.1", "2222", "", "22"),
+        }
         changes = HOST.forwarding_changes(existing, "192.168.0.205", "10.0.2.15")
         self.assertEqual(("delete", "fritz-tv-rtp-50000"), changes[0])
         self.assertEqual(33, len(changes))
         self.assertFalse(any(value == "ssh" for _, value in changes))
 
     def test_remove_only_owned_ports_without_a_vpn_route(self):
-        existing = {"ssh": ("ssh", "tcp", "127.0.0.1", "2222", "", "22"),
-                    "fritz-tv-rtp-50000": ("fritz-tv-rtp-50000", "udp", "192.168.0.205", "50000", "10.0.2.15", "50000"),
-                    "fritz-tv-rtp-unrelated": ("fritz-tv-rtp-unrelated", "udp", "192.168.0.205", "51000", "10.0.2.15", "51000")}
+        existing = {
+            "ssh": ("ssh", "tcp", "127.0.0.1", "2222", "", "22"),
+            "fritz-tv-rtp-50000": ("fritz-tv-rtp-50000", "udp", "192.168.0.205", "50000", "10.0.2.15", "50000"),
+            "fritz-tv-rtp-unrelated": ("fritz-tv-rtp-unrelated", "udp", "192.168.0.205", "51000", "10.0.2.15", "51000"),
+        }
         self.assertEqual([("delete", "fritz-tv-rtp-50000")], HOST.forwarding_changes(existing, None, "", True))
 
     def test_refuses_broad_or_invalid_binding(self):
-        for source in ("0.0.0.0", "127.0.0.1", "239.255.255.250"):
+        for source in ("0.0.0.0", "127.0.0.1", "239.255.255.250"):  # noqa: S104 - rejection fixtures never bind a socket.
             with self.subTest(source=source), self.assertRaises(ValueError):
                 HOST.forwarding_changes({}, source, "10.0.2.15")
 

@@ -1,5 +1,5 @@
-using FritzTV.Core.Models;
 using FritzTV.Core.Exceptions;
+using FritzTV.Core.Models;
 
 namespace FritzTV.Infrastructure.Transport;
 
@@ -8,9 +8,12 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, SessionEntry> sessions = new(StringComparer.Ordinal);
     private bool disposed;
+    private IReadOnlyList<TunerUsage> usageSnapshot = Array.Empty<TunerUsage>();
     private readonly Lock openingLock = new();
     private CancellationTokenSource? openingSource;
     private TunerPriority openingPriority;
+
+    public IReadOnlyList<TunerUsage> GetUsageSnapshot() => Volatile.Read(ref usageSnapshot);
 
     public async Task<ChannelLease> AcquireAsync(SatIpDevice device, TvChannel channel, TunerPriority priority, CancellationToken cancellationToken = default)
     {
@@ -34,7 +37,7 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
             {
                 await MakeRoomAsync(device, priority).ConfigureAwait(false);
                 var session = await OpenSessionAsync(SatIpTuning.WithPids(channel.StreamUri, pids), priority, cancellationToken).ConfigureAwait(false);
-                entry = new SessionEntry(device.Id, session);
+                entry = new SessionEntry(device.Id, device.TunerCount, session);
                 sessions.Add(key, entry);
             }
             else
@@ -46,10 +49,11 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
             var id = Guid.NewGuid();
             entry.Consumers.Add(id, (pids, priority));
             var subscription = entry.Session.Subscribe(discardOldest: priority == TunerPriority.GuideScan);
-            return new ChannelLease(channel, entry.Session, subscription, pids, () => ReleaseAsync(key, id));
+            return new ChannelLease(channel, entry.Session, subscription, pids, (requested, token) => UpdateConsumerPidsAsync(key, id, requested, token), () => ReleaseAsync(key, id));
         }
         finally
         {
+            UpdateUsage();
             gate.Release();
         }
     }
@@ -74,9 +78,19 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
         }
         finally
         {
+            UpdateUsage();
             gate.Release();
         }
     }
+
+    private void UpdateUsage()
+    {
+        var snapshot = sessions.Values.GroupBy(entry => entry.DeviceId).Select(group => new TunerUsage(group.Key, group.Count(), group.First().TunerCount,
+            group.Sum(entry => entry.Consumers.Count), CountConsumers(group, TunerPriority.Recording), CountConsumers(group, TunerPriority.Viewing), CountConsumers(group, TunerPriority.GuideScan))).ToArray();
+        Volatile.Write(ref usageSnapshot, Array.AsReadOnly(snapshot));
+    }
+
+    private static int CountConsumers(IEnumerable<SessionEntry> entries, TunerPriority priority) => entries.Sum(entry => entry.Consumers.Values.Count(consumer => consumer.Priority == priority));
 
     private async Task WaitForAcquisitionGateAsync(TunerPriority priority, CancellationToken cancellationToken)
     {
@@ -154,6 +168,27 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
         await victim.Value.Session.DisposeAsync().ConfigureAwait(false);
     }
 
+    private async Task UpdateConsumerPidsAsync(string key, Guid id, IReadOnlySet<int> requested, CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!sessions.TryGetValue(key, out var entry) || !entry.Consumers.TryGetValue(id, out var consumer) || !entry.Session.IsRunning)
+            {
+                throw new IOException("The tuner lease ended before its programme PID selection could be updated.");
+            }
+
+            var previous = entry.Pids;
+            var next = entry.Consumers.Where(item => item.Key != id).SelectMany(item => item.Value.Pids).Concat(requested).ToHashSet();
+            await entry.Session.UpdatePidsAsync(next.Except(previous), previous.Except(next), cancellationToken).ConfigureAwait(false);
+            entry.Consumers[id] = (requested, consumer.Priority);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private async Task ReleaseAsync(string key, Guid id)
     {
         await gate.WaitAsync().ConfigureAwait(false);
@@ -189,13 +224,16 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
         }
         finally
         {
+            UpdateUsage();
             gate.Release();
         }
     }
 
-    private sealed class SessionEntry(Guid deviceId, SatIpSession session)
+    private sealed class SessionEntry(Guid deviceId, int tunerCount, SatIpSession session)
     {
         public Guid DeviceId { get; } = deviceId;
+
+        public int TunerCount { get; } = tunerCount;
 
         public SatIpSession Session { get; } = session;
 

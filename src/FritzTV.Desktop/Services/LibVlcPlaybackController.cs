@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
 using FritzTV.Core.Models;
 using FritzTV.Infrastructure.Persistence;
 using FritzTV.Infrastructure.Playback;
@@ -9,6 +11,7 @@ namespace FritzTV.Desktop.Services;
 
 public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSessionManager sessions) : IPlaybackController, IAsyncDisposable
 {
+    private static int _linuxLoaderConfigured;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LibVLC? _libVlc;
     private MediaPlayer? _mediaPlayer;
@@ -21,6 +24,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     private TvChannel? _currentChannel;
     private DateTimeOffset _origin;
     private DateTimeOffset? _pausedAt;
+    private DateTimeOffset? _pendingBufferedSeek;
     private long _elapsedMilliseconds;
     private long _lengthMilliseconds;
     private long _warmupMilliseconds;
@@ -48,6 +52,8 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     public int? CurrentServiceId => _bufferedPlayback?.Programme?.ServiceId;
 
     internal BufferedPlayback? BufferedSource => _bufferedPlayback;
+
+    public ReceptionSnapshot Reception => new(sessions.GetUsageSnapshot(), _bufferedPlayback?.ReceptionStatus, _bufferedPlayback?.RtpPackets ?? 0, _bufferedPlayback?.LostPackets ?? 0);
 
     public IReadOnlyList<Programme> Guide => _bufferedPlayback?.GuideSnapshot ?? [];
 
@@ -111,18 +117,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
         try
         {
-            if (_filePlayback && _mediaPlayer is not null)
-            {
-                _mediaPlayer.Time = Math.Max(0, (long)((position ?? DateTimeOffset.UnixEpoch) - DateTimeOffset.UnixEpoch).TotalMilliseconds);
-            }
-            else if (_bufferedPlayback is not null)
-            {
-                bool remainPaused = _paused && position is not null;
-                await StopDecoderAsync().ConfigureAwait(true);
-                _paused = remainPaused;
-                OpenBufferedMedia(position);
-                _pausedAt = remainPaused ? _reader!.TargetStart : null;
-            }
+            await SeekCoreAsync(position).ConfigureAwait(true);
         }
         finally
         {
@@ -130,26 +125,64 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         }
     }
 
+    private async Task SeekCoreAsync(DateTimeOffset? position)
+    {
+        if (_filePlayback && _mediaPlayer is not null)
+        {
+            _mediaPlayer.Time = Math.Max(0, (long)((position ?? DateTimeOffset.UnixEpoch) - DateTimeOffset.UnixEpoch).TotalMilliseconds);
+        }
+        else if (_bufferedPlayback?.Buffer.Range is { } range)
+        {
+            bool remainPaused = _paused && position is not null;
+            await StopDecoderAsync().ConfigureAwait(true);
+            _paused = remainPaused;
+            _pausedAt = remainPaused ? range.Clamp(position!.Value) : null;
+            _pendingBufferedSeek = _pausedAt;
+            if (remainPaused)
+            {
+                // Keep capture running but defer decoder startup until resume. Starting a demuxer
+                // with a closed input gate would race VLC's initial paused state against resume.
+                _outputReady = false;
+                ApplyOutputState();
+                NativeOutputChanged?.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                OpenBufferedMedia(position);
+            }
+        }
+    }
+
     public async Task TogglePauseAsync(CancellationToken cancellationToken)
     {
-        PlaybackSnapshot? snapshot = GetSnapshot();
-        if (snapshot is null || _mediaPlayer is null)
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        try
         {
-            return;
-        }
+            PlaybackSnapshot? snapshot = GetSnapshot();
+            if (snapshot is null || _mediaPlayer is null)
+            {
+                return;
+            }
 
-        if (_paused && snapshot.ResumePointExpired)
-        {
-            _paused = false;
-            _pausedAt = null;
-            await SeekAsync(snapshot.Earliest, cancellationToken).ConfigureAwait(true);
+            if (_paused && (snapshot.ResumePointExpired || _pendingBufferedSeek is not null))
+            {
+                DateTimeOffset target = snapshot.ResumePointExpired ? snapshot.Earliest : _pendingBufferedSeek!.Value;
+                _paused = false;
+                _pausedAt = null;
+                _pendingBufferedSeek = null;
+                await SeekCoreAsync(target).ConfigureAwait(true);
+            }
+            else
+            {
+                _paused = !_paused;
+                _pausedAt = _paused ? snapshot.Position : null;
+                _controlledInput?.SetPaused(_paused);
+                _mediaPlayer.SetPause(_paused);
+            }
         }
-        else
+        finally
         {
-            _paused = !_paused;
-            _pausedAt = _paused ? snapshot.Position : null;
-            _controlledInput?.SetPaused(_paused);
-            _mediaPlayer.SetPause(_paused);
+            _gate.Release();
         }
     }
 
@@ -265,6 +298,12 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             return;
         }
 
+        if (OperatingSystem.IsLinux() && Interlocked.Exchange(ref _linuxLoaderConfigured, 1) == 0)
+        {
+            NativeLibrary.SetDllImportResolver(typeof(LibVLC).Assembly, (name, _, _) =>
+                string.Equals(name, "libvlc", StringComparison.Ordinal) ? NativeLibrary.Load("libvlc.so.5") : IntPtr.Zero);
+        }
+
         LibVLCSharp.Shared.Core.Initialize();
         _libVlc = new LibVLC("--no-video-title-show", "--avcodec-hw=any", "--deinterlace=-1", "--deinterlace-mode=yadif");
         _mediaPlayer = new MediaPlayer(_libVlc) { EnableKeyInput = false, EnableMouseInput = false };
@@ -301,12 +340,8 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _input = new StreamMediaInput(_controlledInput);
         _media = new Media(_libVlc!, _input);
         _media.AddOption(":demux=ts");
+        _media.AddOption(":program=" + _bufferedPlayback.Programme!.ServiceId.ToString(CultureInfo.InvariantCulture));
         _media.AddOption(":network-caching=1000");
-        if (_paused)
-        {
-            _media.AddOption(":start-paused");
-        }
-
         StartNativeMedia();
     }
 
@@ -362,5 +397,6 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _filePlayback = false;
         _paused = false;
         _pausedAt = null;
+        _pendingBufferedSeek = null;
     }
 }

@@ -24,6 +24,21 @@ internal static class DvbFixtures
         return CompleteSection(data);
     }
 
+    public static byte[] EitWithDescriptors(params byte[][] descriptors)
+    {
+        var original = Eit();
+        var data = original.AsSpan(0, original.Length - 4).ToArray().ToList();
+        foreach (var descriptor in descriptors)
+        {
+            data.AddRange(descriptor);
+        }
+
+        var length = data.Count - 26;
+        data[24] = (byte)(0x80 | (length >> 8));
+        data[25] = (byte)length;
+        return CompleteSection(data);
+    }
+
     public static byte[] Pat(int padding = 0)
     {
         var data = new List<byte> { 0, 0xb0, 0, 0x04, 0x4d, 0xc1, 0, 0, 0x28, 0x3d, 0xf3, 0xec };
@@ -47,6 +62,31 @@ internal static class DvbFixtures
         var data = new List<byte> { 0x42, 0xb0, 0, 0x04, 0x4d, 0xc1, 0, 0, 0, 1, 0xff, 0x28, 0x3d, 0xff, 0x80, (byte)(body.Count + 2), 0x48, (byte)body.Count };
         data.AddRange(body);
         return CompleteSection(data);
+    }
+
+    public static byte[] PatService(ushort serviceId, int pmtPid, byte number, byte last, int version = 0)
+    {
+        var section = Pat();
+        BinaryPrimitives.WriteUInt16BigEndian(section.AsSpan(8), serviceId);
+        section[10] = (byte)(0xe0 | (pmtPid >> 8));
+        section[11] = (byte)pmtPid;
+        return SetSectionHeader(section, number, last, version);
+    }
+
+    public static byte[] SdtService(ushort serviceId, byte number, byte last, int version = 0)
+    {
+        var section = Sdt();
+        BinaryPrimitives.WriteUInt16BigEndian(section.AsSpan(11), serviceId);
+        return SetSectionHeader(section, number, last, version);
+    }
+
+    private static byte[] SetSectionHeader(byte[] section, byte number, byte last, int version)
+    {
+        section[5] = (byte)(0xc1 | (version << 1));
+        section[6] = number;
+        section[7] = last;
+        BinaryPrimitives.WriteUInt32BigEndian(section.AsSpan(section.Length - 4), MpegCrc32.Compute(section.AsSpan(0, section.Length - 4)));
+        return section;
     }
 
     public static IReadOnlyList<byte[]> Packetize(byte[] section, int pid, int continuity = 0)

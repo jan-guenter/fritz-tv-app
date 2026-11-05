@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
 using FritzTV.Core.Models;
-using Microsoft.Data.Sqlite;
 using FritzTV.Infrastructure.Transport;
+using Microsoft.Data.Sqlite;
 
 namespace FritzTV.Infrastructure.Persistence;
 
@@ -19,12 +19,12 @@ public sealed class AppRepository(string databasePath)
         using var versionCommand = connection.CreateCommand();
         versionCommand.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(await versionCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
-        if (version > 2)
+        if (version > 3)
         {
             throw new InvalidDataException("The database was created by a newer application version.");
         }
 
-        if (version == 2)
+        if (version == 3)
         {
             return;
         }
@@ -39,16 +39,22 @@ public sealed class AppRepository(string databasePath)
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
+        if (version is > 0 and < 3)
+        {
+            command.CommandText = "ALTER TABLE channels ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 2147483647;";
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS channel_aliases (alias TEXT PRIMARY KEY, channel_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, favourite INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, favourite INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 2147483647, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS programmes (id TEXT PRIMARY KEY, channel_key TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, payload TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS ix_programmes_range ON programmes(channel_key, start, end);
             CREATE TABLE IF NOT EXISTS definitions (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-            PRAGMA user_version=2;
+            PRAGMA user_version=3;
             """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -103,11 +109,12 @@ public sealed class AppRepository(string databasePath)
         command.Parameters.AddWithValue("$id", canonicalId);
         var oldPayload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
         var existing = oldPayload is null ? null : JsonSerializer.Deserialize<TvChannel>(oldPayload, JsonOptions);
-        var updated = channel with { Id = canonicalId, ServiceId = channel.ServiceId ?? existing?.ServiceId, ServiceIdentity = channel.ServiceIdentity ?? existing?.ServiceIdentity };
-        command.CommandText = "INSERT INTO channels(id,device_id,favourite,payload) VALUES($id,$device,$favourite,$payload) ON CONFLICT(id) DO UPDATE SET device_id=excluded.device_id,payload=excluded.payload; INSERT INTO channel_aliases(alias,channel_id) VALUES($alias,$id) ON CONFLICT(alias) DO UPDATE SET channel_id=excluded.channel_id;";
+        var updated = channel with { Id = canonicalId, ServiceId = channel.ServiceId ?? existing?.ServiceId, ServiceIdentity = channel.ServiceIdentity ?? existing?.ServiceIdentity, SortOrder = existing?.SortOrder ?? channel.SortOrder };
+        command.CommandText = "INSERT INTO channels(id,device_id,favourite,sort_order,payload) VALUES($id,$device,$favourite,$sort,$payload) ON CONFLICT(id) DO UPDATE SET device_id=excluded.device_id,payload=excluded.payload; INSERT INTO channel_aliases(alias,channel_id) VALUES($alias,$id) ON CONFLICT(alias) DO UPDATE SET channel_id=excluded.channel_id;";
         command.Parameters.AddWithValue("$alias", channel.Id);
         command.Parameters.AddWithValue("$device", updated.DeviceId.ToString("D", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$favourite", updated.IsFavorite);
+        command.Parameters.AddWithValue("$sort", updated.SortOrder);
         command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(updated, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         return updated.Id;
@@ -145,16 +152,45 @@ public sealed class AppRepository(string databasePath)
     {
         using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload,favourite FROM channels WHERE COALESCE(json_extract(payload,'$.IsAvailable'),1)=1 ORDER BY rowid;";
+        command.CommandText = "SELECT payload,favourite,sort_order FROM channels WHERE COALESCE(json_extract(payload,'$.IsAvailable'),1)=1 ORDER BY sort_order,rowid;";
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<TvChannel>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var channel = JsonSerializer.Deserialize<TvChannel>(reader.GetString(0), JsonOptions) ?? throw new InvalidDataException("Invalid stored channel.");
-            result.Add(channel with { IsFavorite = reader.GetBoolean(1) });
+            result.Add(channel with { IsFavorite = reader.GetBoolean(1), SortOrder = reader.GetInt32(2) });
         }
 
         return result;
+    }
+
+    public async Task SetChannelOrderAsync(IEnumerable<string> orderedIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(orderedIds);
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = connection.BeginTransaction();
+        var canonical = new List<string>();
+        foreach (var id in orderedIds)
+        {
+            canonical.Add(await ResolveIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false));
+        }
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT payload FROM channels ORDER BY sort_order,rowid;";
+        var existing = await ReadAsync<TvChannel>(command, cancellationToken).ConfigureAwait(false);
+        var order = canonical.Concat(existing.Select(channel => channel.Id)).Distinct(StringComparer.Ordinal).ToArray();
+        command.CommandText = "UPDATE channels SET sort_order=$sort,payload=json_set(payload,'$.SortOrder',$sort) WHERE id=$id;";
+        var sortParameter = command.Parameters.Add("$sort", SqliteType.Integer);
+        var idParameter = command.Parameters.Add("$id", SqliteType.Text);
+        for (var index = 0; index < order.Length; index++)
+        {
+            sortParameter.Value = index;
+            idParameter.Value = order[index];
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SetFavoriteAsync(string channelId, bool favorite, CancellationToken cancellationToken = default)
@@ -199,6 +235,18 @@ public sealed class AppRepository(string databasePath)
         return await ReadAsync<Programme>(command, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<Programme>> GetProgrammesAsync(DvbServiceIdentity service, DateTimeOffset from, DateTimeOffset until, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT payload FROM programmes WHERE channel_key=$channel AND start<$until AND end>$from ORDER BY start;";
+        command.Parameters.AddWithValue("$channel", ServiceKey(service));
+        command.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds());
+        command.Parameters.AddWithValue("$until", until.ToUnixTimeSeconds());
+        return await ReadAsync<Programme>(command, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task PruneProgrammesAsync(DateTimeOffset oldest, DateTimeOffset newest, CancellationToken cancellationToken = default)
     {
         using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -214,6 +262,95 @@ public sealed class AppRepository(string databasePath)
         var channel = await GetChannelAsync(definition.ChannelId, cancellationToken).ConfigureAwait(false);
         var updated = channel is null ? definition : definition with { ChannelId = channel.Id };
         await SaveAsync("definitions", definition.Id.ToString("D", CultureInfo.InvariantCulture), updated, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task ResolveDefinitionPaddingAsync(RecordingDefinition resolved, TimeSpan previousStartPadding, TimeSpan previousEndPadding, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolved);
+        if (resolved.StartPadding is null || resolved.EndPadding is null)
+        {
+            throw new ArgumentException("Resolved padding must be explicit.", nameof(resolved));
+        }
+
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT payload FROM definitions WHERE id=$id;";
+        command.Parameters.AddWithValue("$id", resolved.Id.ToString("D", CultureInfo.InvariantCulture));
+        var payload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string ?? throw new KeyNotFoundException("The recording definition is not stored.");
+        var previous = JsonSerializer.Deserialize<RecordingDefinition>(payload, JsonOptions) ?? throw new InvalidDataException("Invalid stored recording definition.");
+        if (previous.StartPadding is not null && previous.EndPadding is not null)
+        {
+            return;
+        }
+
+        var channel = await ReadChannelAsync(connection, transaction, resolved.ChannelId, cancellationToken).ConfigureAwait(false);
+        resolved = resolved with { ChannelId = channel?.Id ?? resolved.ChannelId };
+        command.CommandText = "UPDATE definitions SET payload=$payload WHERE id=$id;";
+        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(resolved, JsonOptions));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await AdjustPendingPaddingAsync(connection, transaction, resolved, previousStartPadding, previousEndPadding, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AdjustPendingPaddingAsync(SqliteConnection connection, SqliteTransaction transaction, RecordingDefinition resolved, TimeSpan previousStartPadding, TimeSpan previousEndPadding, CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT payload FROM recordings WHERE json_extract(payload,'$.DefinitionId')=$definition AND json_extract(payload,'$.State') IN($scheduled,$conflict);";
+        command.Parameters.AddWithValue("$definition", resolved.Id.ToString("D", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$scheduled", (int)RecordingState.Scheduled);
+        command.Parameters.AddWithValue("$conflict", (int)RecordingState.Conflict);
+        var recordings = await ReadAsync<RecordingInstance>(command, cancellationToken).ConfigureAwait(false);
+        command.CommandText = "UPDATE recordings SET payload=$payload WHERE id=$id;";
+        var idParameter = command.Parameters.Add("$id", SqliteType.Text);
+        var payloadParameter = command.Parameters.Add("$payload", SqliteType.Text);
+        foreach (var recording in recordings)
+        {
+            var updated = recording with { Start = recording.Start + previousStartPadding - resolved.EffectiveStartPadding, End = recording.End + resolved.EffectiveEndPadding - previousEndPadding };
+            idParameter.Value = updated.Id.ToString("D", CultureInfo.InvariantCulture);
+            payloadParameter.Value = JsonSerializer.Serialize(updated, JsonOptions);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task UpdateDefinitionTimingAsync(RecordingDefinition resolved, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolved);
+        if (resolved.RepeatOn != Weekdays.None)
+        {
+            throw new ArgumentException("An event-linked timing update must be a one-off recording.", nameof(resolved));
+        }
+
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = connection.BeginTransaction();
+        var channel = await ReadChannelAsync(connection, transaction, resolved.ChannelId, cancellationToken).ConfigureAwait(false);
+        resolved = resolved with { ChannelId = channel?.Id ?? resolved.ChannelId };
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE definitions SET payload=$payload WHERE id=$id;";
+        command.Parameters.AddWithValue("$id", resolved.Id.ToString("D", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(resolved, JsonOptions));
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+        {
+            throw new KeyNotFoundException("The recording definition is not stored.");
+        }
+
+        command.CommandText = "SELECT payload FROM recordings WHERE json_extract(payload,'$.DefinitionId')=$id AND json_extract(payload,'$.State') IN($scheduled,$conflict);";
+        command.Parameters.AddWithValue("$scheduled", (int)RecordingState.Scheduled);
+        command.Parameters.AddWithValue("$conflict", (int)RecordingState.Conflict);
+        var instances = await ReadAsync<RecordingInstance>(command, cancellationToken).ConfigureAwait(false);
+        command.CommandText = "UPDATE recordings SET payload=$payload WHERE id=$id;";
+        foreach (var instance in instances)
+        {
+            var updated = instance with { Start = resolved.Start - resolved.EffectiveStartPadding, End = resolved.End + resolved.EffectiveEndPadding };
+            command.Parameters["$id"].Value = instance.Id.ToString("D", CultureInfo.InvariantCulture);
+            command.Parameters["$payload"].Value = JsonSerializer.Serialize(updated, JsonOptions);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public Task<IReadOnlyList<RecordingDefinition>> GetDefinitionsAsync(CancellationToken cancellationToken = default) => ReadAllAsync<RecordingDefinition>("definitions", cancellationToken);
@@ -253,8 +390,14 @@ public sealed class AppRepository(string databasePath)
     public async Task<TvChannel?> GetChannelAsync(string id, CancellationToken cancellationToken = default)
     {
         using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadChannelAsync(connection, null, id, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<TvChannel?> ReadChannelAsync(SqliteConnection connection, SqliteTransaction? transaction, string id, CancellationToken cancellationToken)
+    {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload,favourite FROM channels WHERE id=COALESCE((SELECT channel_id FROM channel_aliases WHERE alias=$id),$id);";
+        command.Transaction = transaction;
+        command.CommandText = "SELECT payload,favourite,sort_order FROM channels WHERE id=COALESCE((SELECT channel_id FROM channel_aliases WHERE alias=$id),$id);";
         command.Parameters.AddWithValue("$id", id);
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -263,21 +406,21 @@ public sealed class AppRepository(string databasePath)
         }
 
         var channel = JsonSerializer.Deserialize<TvChannel>(reader.GetString(0), JsonOptions) ?? throw new InvalidDataException("Invalid stored channel.");
-        return channel with { IsFavorite = reader.GetBoolean(1) };
+        return channel with { IsFavorite = reader.GetBoolean(1), SortOrder = reader.GetInt32(2) };
     }
 
     public async Task<TvChannel> ResolveChannelAsync(string id, DvbServiceIdentity identity, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(identity);
-        var existing = await GetChannelAsync(id, cancellationToken).ConfigureAwait(false) ?? throw new KeyNotFoundException("The channel is not stored.");
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = connection.BeginTransaction();
+        var existing = await ReadChannelAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false) ?? throw new KeyNotFoundException("The channel is not stored.");
         if (existing.DeviceId != identity.DeviceId)
         {
             throw new ArgumentException("The DVB identity belongs to a different device.", nameof(identity));
         }
 
         var resolved = existing with { Id = ChannelIdentity.ForService(identity), ServiceId = identity.ServiceId, ServiceIdentity = identity };
-        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$old", existing.Id);
@@ -286,10 +429,15 @@ public sealed class AppRepository(string databasePath)
         command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(resolved, JsonOptions));
         if (!string.Equals(existing.Id, resolved.Id, StringComparison.Ordinal))
         {
-            command.CommandText = "SELECT COUNT(*) FROM channels WHERE id=$new;";
-            var alreadyPresent = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture) > 0;
+            var canonical = await ReadChannelAsync(connection, transaction, resolved.Id, cancellationToken).ConfigureAwait(false);
+            var alreadyPresent = canonical is not null;
+            if (canonical is not null)
+            {
+                resolved = resolved with { IsFavorite = resolved.IsFavorite || canonical.IsFavorite, SortOrder = Math.Min(resolved.SortOrder, canonical.SortOrder) };
+                command.Parameters["$payload"].Value = JsonSerializer.Serialize(resolved, JsonOptions);
+            }
             command.CommandText = alreadyPresent
-                ? "UPDATE channels SET favourite=MAX(favourite,(SELECT favourite FROM channels WHERE id=$old)),payload=$payload WHERE id=$new; DELETE FROM channels WHERE id=$old;"
+                ? "UPDATE channels SET favourite=MAX(favourite,(SELECT favourite FROM channels WHERE id=$old)),sort_order=MIN(sort_order,(SELECT sort_order FROM channels WHERE id=$old)),payload=$payload WHERE id=$new; DELETE FROM channels WHERE id=$old;"
                 : "UPDATE channels SET id=$new,payload=$payload WHERE id=$old;";
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }

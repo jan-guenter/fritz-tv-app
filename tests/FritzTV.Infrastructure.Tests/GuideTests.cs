@@ -33,6 +33,28 @@ public sealed class GuideTests
     }
 
     [Fact]
+    public void CoverageCannotFinishBeforeAllAdvertisedScheduleServicesArrive()
+    {
+        var tracker = new EitCoverageTracker();
+        tracker.ExpectServices([10301, 11110]);
+        foreach (var service in new ushort[] { 10301, 11110 })
+        {
+            foreach (var table in new byte[] { 0x50, 0x51 })
+            {
+                foreach (var number in new byte[] { 0, 1, 2, 8, 9 })
+                {
+                    var section = Section(number, table);
+                    BinaryPrimitives.WriteUInt16BigEndian(section.AsSpan(3), service);
+                    BinaryPrimitives.WriteUInt32BigEndian(section.AsSpan(section.Length - 4), MpegCrc32.Compute(section.AsSpan(0, section.Length - 4)));
+                    tracker.Observe(section);
+                }
+            }
+
+            Assert.Equal(service == 11110, tracker.IsComplete);
+        }
+    }
+
+    [Fact]
     public async Task GuideRejectsStaleVersionsAndPersistsActualTransportUpdates()
     {
         var directory = Path.Combine(Path.GetTempPath(), "fritztv-guide-tests-" + Guid.NewGuid().ToString("N"));
@@ -53,6 +75,38 @@ public sealed class GuideTests
             var saved = Assert.Single(await repository.GetProgrammesAsync(clock.GetUtcNow(), clock.GetUtcNow().AddDays(1), cancellationToken));
             Assert.Equal("Updated", saved.Title);
             Assert.Equal(1, service.Status.ProgrammeCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RestartRetainsPersistedVersionAgainstOlderLiveEvents()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "fritztv-guide-restart-tests-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new ManualTimeProvider();
+        try
+        {
+            var repository = new AppRepository(Path.Combine(directory, "app.db"));
+            await repository.InitializeAsync(cancellationToken);
+            var programme = new Programme(new DvbServiceIdentity(Guid.NewGuid(), 1, 2, 3), 42, clock.GetUtcNow().AddHours(1), TimeSpan.FromHours(1), "Persisted version", "Description", "eng", 0x50, 5);
+            await repository.SaveProgrammesAsync([programme], cancellationToken);
+            await using var sessions = new SatIpSessionManager();
+            using var service = new GuideService(repository, sessions, NullLogger<GuideService>.Instance, clock);
+            service.Ingest([programme with { Version = 4, Title = "Older live event" }]);
+            await service.RefreshAsync(cancellationToken);
+            Assert.Equal("Persisted version", Assert.Single(await repository.GetProgrammesAsync(clock.GetUtcNow(), clock.GetUtcNow().AddDays(1), cancellationToken)).Title);
+            Assert.Equal(1, service.Status.ProgrammeCount);
+            Parallel.For(6, 16, version => service.Ingest([programme with { Version = (byte)version, Title = "Latest concurrent version" }]));
+            await service.RefreshAsync(cancellationToken);
+            Assert.Equal(15, Assert.Single(await repository.GetProgrammesAsync(clock.GetUtcNow(), clock.GetUtcNow().AddDays(1), cancellationToken)).Version);
         }
         finally
         {

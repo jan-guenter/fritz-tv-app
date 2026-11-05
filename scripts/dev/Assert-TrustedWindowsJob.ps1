@@ -6,7 +6,9 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Stop-UntrustedJob([string]$Reason) {
+function Stop-UntrustedJob {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'This fail-closed trust guard only reports an error and exits; WhatIf must never bypass rejection.')]
+    param([string]$Reason)
     [Console]::Error.WriteLine('FRITZ TV runner denied job: ' + $Reason)
     exit 1
 }

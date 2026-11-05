@@ -61,7 +61,7 @@ public static class EitParser
     private static (string Title, string Description, string Language) ReadDescriptors(ReadOnlySpan<byte> descriptors, string preferredLanguage)
     {
         var shortTexts = new Dictionary<string, (string Title, string Description)>(StringComparer.Ordinal);
-        var extended = new Dictionary<string, SortedDictionary<int, string>>(StringComparer.Ordinal);
+        var extended = new Dictionary<string, SortedDictionary<int, (string Items, string Text)>>(StringComparer.Ordinal);
         while (descriptors.Length >= 2)
         {
             var length = descriptors[1];
@@ -86,7 +86,13 @@ public static class EitParser
 
         var language = shortTexts.ContainsKey(preferredLanguage) ? preferredLanguage : shortTexts.Keys.FirstOrDefault() ?? extended.Keys.FirstOrDefault() ?? string.Empty;
         var shortText = shortTexts.GetValueOrDefault(language);
-        var extra = extended.TryGetValue(language, out var pieces) ? string.Join(Environment.NewLine, pieces.Values) : string.Empty;
+        var extra = string.Empty;
+        if (extended.TryGetValue(language, out var pieces))
+        {
+            var labels = string.Join(Environment.NewLine, pieces.Values.Select(item => item.Items).Where(item => !string.IsNullOrWhiteSpace(item)));
+            var continuation = string.Concat(pieces.Values.Select(item => item.Text));
+            extra = string.Join(Environment.NewLine, new[] { labels, continuation }.Where(item => !string.IsNullOrWhiteSpace(item)));
+        }
         var description = string.Join(Environment.NewLine, new[] { shortText.Description, extra }.Where(item => !string.IsNullOrWhiteSpace(item)));
         return (shortText.Title ?? string.Empty, description, language);
     }
@@ -108,7 +114,7 @@ public static class EitParser
         output[Encoding.ASCII.GetString(body[..3])] = (DvbText.Decode(body.Slice(4, titleLength)), DvbText.Decode(body.Slice(5 + titleLength, textLength)));
     }
 
-    private static void ReadExtended(ReadOnlySpan<byte> body, Dictionary<string, SortedDictionary<int, string>> output)
+    private static void ReadExtended(ReadOnlySpan<byte> body, Dictionary<string, SortedDictionary<int, (string Items, string Text)>> output)
     {
         var itemsLength = body[4];
         if (5 + itemsLength >= body.Length)
@@ -122,6 +128,12 @@ public static class EitParser
             return;
         }
 
+        var items = ReadExtendedItems(body.Slice(5, itemsLength));
+        if (items is null || (body[0] >> 4) > (body[0] & 15))
+        {
+            return;
+        }
+
         var language = Encoding.ASCII.GetString(body.Slice(1, 3));
         if (!output.TryGetValue(language, out var pieces))
         {
@@ -129,7 +141,33 @@ public static class EitParser
             output.Add(language, pieces);
         }
 
-        pieces[body[0] >> 4] = DvbText.Decode(body.Slice(6 + itemsLength, textLength));
+        pieces[body[0] >> 4] = (items, DvbText.Decode(body.Slice(6 + itemsLength, textLength)));
+    }
+
+    private static string? ReadExtendedItems(ReadOnlySpan<byte> items)
+    {
+        var descriptions = new List<string>();
+        while (!items.IsEmpty)
+        {
+            var labelLength = items[0];
+            if (labelLength + 1 >= items.Length)
+            {
+                return null;
+            }
+
+            var textLength = items[labelLength + 1];
+            if (labelLength + textLength + 2 > items.Length)
+            {
+                return null;
+            }
+
+            var label = DvbText.Decode(items.Slice(1, labelLength));
+            var text = DvbText.Decode(items.Slice(labelLength + 2, textLength));
+            descriptions.Add(string.IsNullOrWhiteSpace(label) ? text : label + ": " + text);
+            items = items[(labelLength + textLength + 2)..];
+        }
+
+        return string.Join(Environment.NewLine, descriptions);
     }
 
     private static ushort Read16(ReadOnlySpan<byte> data, int offset) => BinaryPrimitives.ReadUInt16BigEndian(data.Slice(offset, 2));

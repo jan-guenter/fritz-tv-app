@@ -60,10 +60,10 @@ public sealed class SsdpDiscovery(IPAddress? localAddress = null)
     private static async Task<IReadOnlyList<Uri>> SearchInterfaceAsync(IPAddress address, CancellationToken cancellationToken)
     {
         var found = new HashSet<Uri>();
-        using var client = new UdpClient(new IPEndPoint(address, 0));
-        client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 2);
         try
         {
+            using var client = new UdpClient(new IPEndPoint(address, 0));
+            client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 2);
             await client.SendAsync(Search, MulticastEndpoint, cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {

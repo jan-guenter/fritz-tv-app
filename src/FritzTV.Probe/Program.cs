@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml;
 using FritzTV.Infrastructure.Devices;
 
 namespace FritzTV.Probe;
@@ -40,7 +41,7 @@ internal static class Program
             WriteJson(report);
             return report.TransportPacketCount == 0 ? 2 : 0;
         }
-        catch (Exception exception) when (exception is IOException or HttpRequestException or ArgumentException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or HttpRequestException or ArgumentException or InvalidOperationException or TimeoutException or XmlException)
         {
             Console.Error.WriteLine(exception.Message);
             return 1;

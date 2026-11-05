@@ -1,9 +1,10 @@
-using FritzTV.Core.Models;
 using FritzTV.Core.Exceptions;
+using FritzTV.Core.Guide;
+using FritzTV.Core.Models;
 using FritzTV.Infrastructure.Dvb;
+using FritzTV.Infrastructure.Persistence;
 using FritzTV.Infrastructure.Timeshift;
 using FritzTV.Infrastructure.Transport;
-using FritzTV.Infrastructure.Persistence;
 
 namespace FritzTV.Infrastructure.Playback;
 
@@ -19,10 +20,11 @@ public sealed class BufferedPlayback : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly PsiSectionAssembler assembler = new();
     private readonly Dictionary<ushort, int> pmtPids = [];
-    private readonly Dictionary<(DvbServiceIdentity Service, ushort EventId), Programme> guide = [];
+    private readonly ProgrammeCache guide = new();
     private readonly Lock metadataLock = new();
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task receiveTask;
+    private int? pendingPmtPid;
     private int disposed;
     private int references = 1;
 
@@ -50,18 +52,17 @@ public sealed class BufferedPlayback : IAsyncDisposable
 
     public long DiscontinuityCount { get; private set; }
 
+    public ReceptionStatus? ReceptionStatus => lease.Session.ReceptionStatus;
+
+    public long RtpPackets => lease.Session.ReceivedPackets;
+
+    public long RtcpPackets => lease.Session.RtcpPackets;
+
+    public long LostPackets => lease.Session.LostPackets;
+
     public bool IsRunning => !receiveTask.IsCompleted;
 
-    public IReadOnlyList<Programme> GuideSnapshot
-    {
-        get
-        {
-            lock (metadataLock)
-            {
-                return guide.Values.OrderBy(item => item.Start).ToArray();
-            }
-        }
-    }
+    public IReadOnlyList<Programme> GuideSnapshot => guide.Snapshot();
 
     public static Task<BufferedPlayback> StartAsync(SatIpSessionManager manager, SatIpDevice device, TvChannel channel, AppSettings settings, CancellationToken cancellationToken = default) => StartAsync(manager, device, channel, settings, null, cancellationToken);
 
@@ -75,7 +76,7 @@ public sealed class BufferedPlayback : IAsyncDisposable
         {
             playback = new BufferedPlayback(acquiredLease, settings, manager, device);
             await playback.ready.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
-            if (repository is not null && playback.resolver.Resolve(channel) is { } identity)
+            if (repository is not null && playback.resolver.Resolve(playback.Channel) is { } identity)
             {
                 playback.resolvedChannel = await repository.ResolveChannelAsync(channel.Id, identity, cancellationToken).ConfigureAwait(false);
             }
@@ -165,7 +166,7 @@ public sealed class BufferedPlayback : IAsyncDisposable
                     ready.TrySetException(exception);
                     return;
                 }
-                catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException)
                 {
                     Failure = exception;
                     DiscontinuityCount++;
@@ -195,9 +196,22 @@ public sealed class BufferedPlayback : IAsyncDisposable
 
     private async Task ReadLeaseAsync(CancellationToken cancellationToken)
     {
+        ProgrammeMap? appliedProgramme = null;
+        int? appliedCandidate = null;
         await foreach (var batch in lease.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             var decodable = InspectTransport(batch);
+            if (Programme is { } selected && (!ReferenceEquals(selected, appliedProgramme) || pendingPmtPid != appliedCandidate))
+            {
+                var required = selected.Streams.Select(stream => stream.Pid).Append(selected.PmtPid).Append(selected.PcrPid);
+                if (pendingPmtPid is { } candidate)
+                {
+                    required = required.Append(candidate);
+                }
+                await lease.UpdatePidsAsync(required, cancellationToken).ConfigureAwait(false);
+                appliedProgramme = selected;
+                appliedCandidate = pendingPmtPid;
+            }
             try
             {
                 await Buffer.AppendAsync(batch, cancellationToken).ConfigureAwait(false);
@@ -234,7 +248,7 @@ public sealed class BufferedPlayback : IAsyncDisposable
             {
                 throw;
             }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException)
             {
                 Failure = exception;
             }
@@ -272,23 +286,26 @@ public sealed class BufferedPlayback : IAsyncDisposable
             foreach (var (id, pid) in ProgrammeMapParser.ParsePat(data))
             {
                 pmtPids[id] = pid;
+                if ((Programme?.ServiceId ?? Channel.ServiceId) == id && Programme?.PmtPid != pid)
+                {
+                    pendingPmtPid = pid;
+                }
             }
         }
         else if (data[0] == 2 && ProgrammeMapParser.ParsePmt(section.Pid, data) is { } map
             && (Channel.ServiceId is null || Channel.ServiceId == map.ServiceId))
         {
             Programme = map;
+            resolvedChannel = resolvedChannel with { ServiceId = map.ServiceId };
+            if (pendingPmtPid == map.PmtPid)
+            {
+                pendingPmtPid = null;
+            }
             Buffer.SetProgramme(map);
         }
         else if (data[0] is >= 0x4e and <= 0x6f)
         {
-            lock (metadataLock)
-            {
-                foreach (var programme in EitParser.Parse(deviceId, data))
-                {
-                    guide[(programme.Service, programme.EventId)] = programme;
-                }
-            }
+            guide.Ingest(EitParser.Parse(deviceId, data));
         }
     }
     private sealed class PlaybackRetention(BufferedPlayback owner) : IAsyncDisposable

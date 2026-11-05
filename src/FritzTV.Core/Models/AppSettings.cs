@@ -10,6 +10,10 @@ public sealed record AppSettings
 
     public bool RetainTransportStreams { get; init; }
 
+    public TimeSpan DefaultStartPadding { get; init; } = TimeSpan.FromMinutes(2);
+
+    public TimeSpan DefaultEndPadding { get; init; } = TimeSpan.FromMinutes(5);
+
     public string RecordingDirectory { get; init; } = DefaultRecordingDirectory();
 
     public string BufferDirectory { get; init; } = DefaultBufferDirectory();

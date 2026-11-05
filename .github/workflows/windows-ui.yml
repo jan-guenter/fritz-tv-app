@@ -2,6 +2,11 @@ name: Windows desktop acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      live_device_url:
+        description: 'Optional reachable descriptor URL for live playback/background recording acceptance'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,7 +30,10 @@ jobs:
           global-json-file: global.json
       - name: Verify interactive desktop and toolchain
         shell: pwsh
-        run: ./scripts/dev/Initialize-WindowsVm.ps1 -VerifyOnly
+        run: |
+          ./scripts/dev/Initialize-WindowsVm.ps1 -VerifyOnly
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          Copy-Item (Join-Path $env:LOCALAPPDATA 'FritzTVDevelopment/verification.json') artifacts/toolchain.json
       - name: Build exact revision
         shell: pwsh
         run: |
@@ -39,10 +47,15 @@ jobs:
           dotnet restore tests/FritzTV.Windows.UiTests --locked-mode
           exit $LASTEXITCODE
       - name: Run native desktop regression tests
+        env:
+          FRITZTV_LIVE_DEVICE: ${{ inputs.live_device_url }}
         shell: pwsh
         run: |
           $env:FRITZTV_UI_APP = Join-Path $PWD 'artifacts/app/FritzTV.Desktop.exe'
-          $env:FRITZTV_RTP_PORT = '50000'
+          $env:FRITZTV_RTP_FIRST_PORT = '50000'
+          $env:FRITZTV_RTP_LAST_PORT = '50031'
+          $env:FRITZTV_LOG_DIRECTORY = Join-Path $PWD 'artifacts/logs'
+          $env:FRITZTV_UI_ARTIFACTS = Join-Path $PWD 'artifacts/ui-logs'
           dotnet test --project tests/FritzTV.Windows.UiTests/FritzTV.Windows.UiTests.csproj -c Release --report-trx --results-directory artifacts/test-results
           exit $LASTEXITCODE
       - name: Capture console screenshot on failure
@@ -57,4 +70,7 @@ jobs:
             artifacts/test-results
             artifacts/*.txt
             artifacts/*.png
+            artifacts/*.json
+            artifacts/logs
+            artifacts/ui-logs
           if-no-files-found: warn

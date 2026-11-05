@@ -25,7 +25,9 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public int Volume { get; private set; }
 
-    public Task PlayAsync(TvChannel channel, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Exception? PlayFailure { get; init; }
+
+    public Task PlayAsync(TvChannel channel, CancellationToken cancellationToken) => PlayFailure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -35,11 +37,13 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public Task SeekAsync(DateTimeOffset? position, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public ReceptionSnapshot Reception => new([], null, 0, 0);
+
     public PlaybackSnapshot? GetSnapshot() => null;
 
-    public IReadOnlyList<Programme> Guide => [];
+    public IReadOnlyList<Programme> Guide { get; init; } = [];
 
-    public TvChannel? CurrentChannel => null;
+    public TvChannel? CurrentChannel { get; init; }
 
     public int? CurrentServiceId => null;
 
