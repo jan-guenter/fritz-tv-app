@@ -1,4 +1,5 @@
 using FritzTV.Core.Models;
+using FritzTV.Core.Exceptions;
 
 namespace FritzTV.Infrastructure.Transport;
 
@@ -7,21 +8,32 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, SessionEntry> sessions = new(StringComparer.Ordinal);
     private bool disposed;
+    private readonly Lock openingLock = new();
+    private CancellationTokenSource? openingSource;
+    private TunerPriority openingPriority;
 
     public async Task<ChannelLease> AcquireAsync(SatIpDevice device, TvChannel channel, TunerPriority priority, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
         ArgumentNullException.ThrowIfNull(channel);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await WaitForAcquisitionGateAsync(priority, cancellationToken).ConfigureAwait(false);
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             var key = device.Id.ToString("D", System.Globalization.CultureInfo.InvariantCulture) + ":" + SatIpTuning.Key(channel.StreamUri);
             var pids = SatIpTuning.Pids(channel.StreamUri);
-            if (!sessions.TryGetValue(key, out var entry))
+            sessions.TryGetValue(key, out var entry);
+            if (entry is not null && !entry.Session.IsRunning)
+            {
+                sessions.Remove(key);
+                await entry.Session.DisposeAsync().ConfigureAwait(false);
+                entry = null;
+            }
+
+            if (entry is null)
             {
                 await MakeRoomAsync(device, priority).ConfigureAwait(false);
-                var session = await SatIpSession.OpenAsync(SatIpTuning.WithPids(channel.StreamUri, pids), firstPort, lastPort, cancellationToken).ConfigureAwait(false);
+                var session = await OpenSessionAsync(SatIpTuning.WithPids(channel.StreamUri, pids), priority, cancellationToken).ConfigureAwait(false);
                 entry = new SessionEntry(device.Id, session);
                 sessions.Add(key, entry);
             }
@@ -66,6 +78,62 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
         }
     }
 
+    private async Task WaitForAcquisitionGateAsync(TunerPriority priority, CancellationToken cancellationToken)
+    {
+        do
+        {
+            CancelLowerPriorityOpening(priority);
+        }
+        while (!await gate.WaitAsync(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false));
+    }
+
+    private void CancelLowerPriorityOpening(TunerPriority requested)
+    {
+        CancellationTokenSource? cancel = null;
+        lock (openingLock)
+        {
+            if (openingSource is not null && requested > openingPriority)
+            {
+                cancel = openingSource;
+            }
+        }
+
+        try
+        {
+            cancel?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The previous opening completed between releasing the lock and cancellation.
+        }
+    }
+
+    private async Task<SatIpSession> OpenSessionAsync(Uri source, TunerPriority priority, CancellationToken cancellationToken)
+    {
+        using var opening = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (openingLock)
+        {
+            openingSource = opening;
+            openingPriority = priority;
+        }
+
+        try
+        {
+            return await SatIpSession.OpenAsync(source, firstPort, lastPort, opening.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TunerUnavailableException("Tuning was interrupted by a higher-priority consumer.", exception);
+        }
+        finally
+        {
+            lock (openingLock)
+            {
+                openingSource = null;
+            }
+        }
+    }
+
     private async Task MakeRoomAsync(SatIpDevice device, TunerPriority requested)
     {
         var allocated = sessions.Where(item => item.Value.DeviceId == device.Id).ToArray();
@@ -78,10 +146,11 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
             .OrderBy(item => item.Value.Consumers.Values.Max(consumer => consumer.Priority)).FirstOrDefault();
         if (victim.Value is null)
         {
-            throw new IOException("All SAT>IP tuners are reserved by equal or higher priority consumers.");
+            throw new TunerUnavailableException();
         }
 
         sessions.Remove(victim.Key);
+        victim.Value.Session.Abort(new TunerUnavailableException("Live viewing or guide scanning was interrupted to start a higher-priority recording."));
         await victim.Value.Session.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -90,19 +159,30 @@ public sealed class SatIpSessionManager(int firstPort = 50000, int lastPort = 50
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!sessions.TryGetValue(key, out var entry))
+            sessions.TryGetValue(key, out var entry);
+            if (entry is not null && !entry.Session.IsRunning)
+            {
+                sessions.Remove(key);
+                await entry.Session.DisposeAsync().ConfigureAwait(false);
+                entry = null;
+            }
+
+            if (entry is null)
             {
                 return;
             }
 
             var previous = entry.Pids;
-            entry.Consumers.Remove(id);
+            if (!entry.Consumers.Remove(id))
+            {
+                return;
+            }
             if (entry.Consumers.Count == 0)
             {
                 sessions.Remove(key);
                 await entry.Session.DisposeAsync().ConfigureAwait(false);
             }
-            else
+            else if (entry.Session.IsRunning)
             {
                 await entry.Session.UpdatePidsAsync([], previous.Except(entry.Pids), CancellationToken.None).ConfigureAwait(false);
             }

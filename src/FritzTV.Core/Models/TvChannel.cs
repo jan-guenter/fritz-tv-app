@@ -7,4 +7,6 @@ public sealed record TvChannel(
     ChannelKind Kind,
     Uri StreamUri,
     int? ServiceId = null,
-    bool IsFavorite = false);
+    bool IsFavorite = false,
+    DvbServiceIdentity? ServiceIdentity = null,
+    bool IsAvailable = true);

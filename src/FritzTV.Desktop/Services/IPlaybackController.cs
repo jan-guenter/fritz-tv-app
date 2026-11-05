@@ -16,7 +16,19 @@ public interface IPlaybackController
 
     Task StopAsync(CancellationToken cancellationToken);
 
-    void TogglePause();
+    Task PlayFileAsync(string path, CancellationToken cancellationToken);
+
+    Task SeekAsync(DateTimeOffset? position, CancellationToken cancellationToken);
+
+    Task TogglePauseAsync(CancellationToken cancellationToken);
+
+    PlaybackSnapshot? GetSnapshot();
+
+    IReadOnlyList<Programme> Guide { get; }
+
+    TvChannel? CurrentChannel { get; }
+
+    int? CurrentServiceId { get; }
 
     void SetVolume(int volume);
 

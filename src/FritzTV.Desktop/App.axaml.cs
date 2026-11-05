@@ -1,13 +1,16 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
+using FritzTV.Core.Models;
 using FritzTV.Desktop.Localization;
 using FritzTV.Desktop.Services;
 using FritzTV.Desktop.ViewModels;
 using FritzTV.Infrastructure.Devices;
 using FritzTV.Infrastructure.Persistence;
+using FritzTV.Infrastructure.Transport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -16,6 +19,8 @@ namespace FritzTV.Desktop;
 public sealed partial class App : Application
 {
     private bool _quitting;
+    private bool _hostDisposed;
+    private bool _osShutdown;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -23,52 +28,83 @@ public sealed partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            ConfigureDesktop(desktop, CreateHost());
+            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            desktop.Startup += async (_, _) => await StartDesktopAsync(desktop).ConfigureAwait(true);
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static IHost CreateHost()
+    private static async Task<IHost> CreateHostAsync()
     {
-        HostApplicationBuilder builder = Host.CreateApplicationBuilder();
+        var repository = new AppRepository(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FritzTV", "app.db"));
+        await repository.InitializeAsync().ConfigureAwait(true);
+        AppSettings settings = await repository.GetSettingsAsync().ConfigureAwait(true);
+        settings = settings with
+        {
+            RtpFirstPort = ReadPort("FRITZTV_RTP_FIRST_PORT", settings.RtpFirstPort),
+            RtpLastPort = ReadPort("FRITZTV_RTP_LAST_PORT", settings.RtpLastPort),
+        };
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { ContentRootPath = AppContext.BaseDirectory });
         builder.Services.AddSingleton<HttpClient>();
         builder.Services.AddSingleton<SatIpDeviceClient>();
         builder.Services.AddSingleton<SsdpDiscovery>();
         builder.Services.AddSingleton<UiText>();
-        builder.Services.AddSingleton(new AppRepository(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FritzTV", "app.db")));
+        builder.Services.AddSingleton(repository);
+        builder.Services.AddSingleton(settings);
+        builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+        builder.Services.AddSingleton(_ => new SatIpSessionManager(settings.RtpFirstPort, settings.RtpLastPort));
         builder.Services.AddSingleton<LibVlcPlaybackController>();
         builder.Services.AddSingleton<IPlaybackController>(services => services.GetRequiredService<LibVlcPlaybackController>());
         builder.Services.AddSingleton<MainWindowViewModel>();
         return builder.Build();
     }
 
-    private void ConfigureDesktop(IClassicDesktopStyleApplicationLifetime desktop, IHost host)
-    {
-        var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
-        var player = host.Services.GetRequiredService<LibVlcPlaybackController>();
-        var window = new MainWindow(viewModel, player);
-        if (!(desktop.Args?.Contains("--background", StringComparer.Ordinal) ?? false))
-        {
-            desktop.MainWindow = window;
-        }
+    private static int ReadPort(string name, int fallback) => int.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.None, CultureInfo.InvariantCulture, out int port)
+        && port is >= 1024 and <= 65535 ? port : fallback;
 
-        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        desktop.Startup += async (_, _) =>
+    private async Task StartDesktopAsync(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
         {
-            try
+            IHost host = await CreateHostAsync().ConfigureAwait(true);
+            var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
+            var player = host.Services.GetRequiredService<LibVlcPlaybackController>();
+            var window = new MainWindow(viewModel, player);
+            ConfigureLifetime(desktop, host, viewModel, window);
+            await viewModel.InitializeAsync(CancellationToken.None).ConfigureAwait(true);
+            await host.StartAsync(CancellationToken.None).ConfigureAwait(true);
+            viewModel.StartUpdates();
+            if (!(desktop.Args?.Contains("--background", StringComparer.Ordinal) ?? false))
             {
-                await viewModel.InitializeAsync(CancellationToken.None).ConfigureAwait(true);
-                await host.StartAsync(CancellationToken.None).ConfigureAwait(true);
+                desktop.MainWindow = window;
+                window.Show();
             }
-            catch (Exception exception)
+        }
+        catch (Exception exception)
+        {
+            ShowStartupFailure(desktop, exception.Message);
+        }
+    }
+
+    private void ConfigureLifetime(IClassicDesktopStyleApplicationLifetime desktop, IHost host, MainWindowViewModel viewModel, MainWindow window)
+    {
+        desktop.ShutdownRequested += (_, args) =>
+        {
+            if (!_quitting)
             {
-                viewModel.ReportStartupError(exception.Message);
+                _osShutdown = true;
+                _quitting = true;
             }
         };
         window.Closing += async (_, args) =>
         {
-            if (!_quitting)
+            if (args.CloseReason == WindowCloseReason.OSShutdown)
+            {
+                _osShutdown = true;
+                _quitting = true;
+            }
+            else if (!_quitting && args.CloseReason == WindowCloseReason.WindowClosing && !args.IsProgrammatic)
             {
                 args.Cancel = true;
                 await viewModel.StopAsync(CancellationToken.None).ConfigureAwait(true);
@@ -81,7 +117,10 @@ public sealed partial class App : Application
         desktop.Exit += (_, _) =>
         {
             tray.Dispose();
-            host.Dispose();
+            if (!_hostDisposed && !_osShutdown)
+            {
+                Task.Run(async () => await DisposeHostAsync(host).ConfigureAwait(false)).GetAwaiter().GetResult();
+            }
         };
     }
 
@@ -105,6 +144,26 @@ public sealed partial class App : Application
         };
     }
 
+    private static void ShowStartupFailure(IClassicDesktopStyleApplicationLifetime desktop, string message)
+    {
+        var quit = new Button { Content = "Quit / Beenden", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
+        quit.Click += (_, _) => desktop.Shutdown(1);
+        var window = new Window
+        {
+            Title = "FRITZ TV",
+            Width = 650,
+            Height = 240,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(24),
+                Spacing = 16,
+                Children = { new TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap }, quit },
+            },
+        };
+        desktop.MainWindow = window;
+        window.Show();
+    }
+
     private async Task QuitAsync(IClassicDesktopStyleApplicationLifetime desktop, IHost host)
     {
         if (_quitting)
@@ -114,6 +173,20 @@ public sealed partial class App : Application
 
         _quitting = true;
         await host.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await DisposeHostAsync(host).ConfigureAwait(true);
+        _hostDisposed = true;
         desktop.Shutdown();
+    }
+
+    private static async Task DisposeHostAsync(IHost host)
+    {
+        if (host is IAsyncDisposable asynchronous)
+        {
+            await asynchronous.DisposeAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            host.Dispose();
+        }
     }
 }

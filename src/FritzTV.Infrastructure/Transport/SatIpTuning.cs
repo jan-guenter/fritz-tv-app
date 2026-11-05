@@ -35,7 +35,7 @@ public static class SatIpTuning
         ArgumentNullException.ThrowIfNull(pids);
         var parameters = Parameters(streamUri);
         parameters["pids"] = string.Join(',', pids.Distinct().Order().Select(value => value.ToString(CultureInfo.InvariantCulture)));
-        return new UriBuilder(streamUri) { Query = string.Join('&', parameters.Select(item => Uri.EscapeDataString(item.Key) + "=" + Uri.EscapeDataString(item.Value))) }.Uri;
+        return new UriBuilder(streamUri) { Query = string.Join('&', parameters.Select(item => Uri.EscapeDataString(item.Key) + "=" + Uri.EscapeDataString(item.Value).Replace("%2C", ",", StringComparison.OrdinalIgnoreCase))) }.Uri;
     }
 
     public static ReadOnlyMemory<byte> Filter(ReadOnlyMemory<byte> transport, IReadOnlySet<int> pids)

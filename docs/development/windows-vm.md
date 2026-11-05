@@ -122,6 +122,23 @@ The bootstrap verifies the official runner archive hash, registers runner `fritz
 
 VM desktop jobs must run only for trusted protected-main commits or explicitly dispatched trusted workflows. Fork PRs use hosted runners. Serialize the VM's FlaUI tests and exploratory desktop control. Before dispatch, release any exploratory automation and ensure the console is unlocked.
 
+### Runner-local admission policy
+
+The workflow's own `if` condition is supplemented by a fail-closed runner pre-job hook. `-ConfigureRunner` requires `Assert-TrustedWindowsJob.ps1` and `Test-TrustedWindowsJob.ps1` beside the bootstrap script, runs the policy tests, copies the guard to `%LOCALAPPDATA%\FritzTVDevelopment\runner-hooks`, verifies the copied SHA-256, and activates `ACTIONS_RUNNER_HOOK_JOB_STARTED` through the runner's local `.env`. The installed hook is outside the mutable checkout. Runner reconfiguration refuses to interrupt an active `Runner.Worker` job and restarts an idle listener so it reads the new environment.
+
+Admission requires all of the following: this repository, `refs/heads/main`, `workflow_dispatch`, the exact `.github/workflows/windows-ui.yml@refs/heads/main` workflow reference, a self-hosted runner, a valid commit SHA, and a matching dispatch event payload. Pull requests, tags, other branches/workflows, missing context, and contradictory payloads exit nonzero before checkout/container/user steps. GitHub documents that a failing pre-job hook prevents the job from running. Action archives may already have been downloaded; this is not a promise that no untrusted bytes have reached the runner.
+
+The runner source selects the hook path from its worker process environment (`JobExtension.cs`), invokes it with an empty workflow environment (`JobHookProvider.cs`), and then exports runner-provided GitHub context (`ScriptHandler.cs` / `GitHubContext.cs`). Workflow-level environment values therefore cannot disable this hook or replace its authoritative `GITHUB_*` fields. Keep the runner patched and review this behavior when upgrading it. `PSExecutionPolicyPreference=RemoteSigned` is scoped to the runner process/children so local checkout scripts can execute; no machine-wide execution policy is changed.
+
+```powershell
+.\scripts\dev\Test-TrustedWindowsJob.ps1
+```
+
+The policy test starts isolated PowerShell child processes for thirteen allow/deny cases and leaves the caller's environment unchanged. Hosted Windows CI runs it too. The bootstrap verification report records guard presence and hash; that report alone does not prove an actual runner-hook invocation. Validate one trusted dispatch and confirm denied contexts before treating the VM lane as operational.
+
+References: [GitHub pre-job hooks](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts), [runner hook selection](https://github.com/actions/runner/blob/main/src/Runner.Worker/JobExtension.cs), [hook handler environment](https://github.com/actions/runner/blob/main/src/Runner.Worker/JobHookProvider.cs), [script context export](https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ScriptHandler.cs).
+
+
 Use GitHub-hosted Windows for clean restore/build/analyzer/headless tests and installer production. The VM adds native desktop/media/regression coverage. Record the exact commit SHA and upload TRX, screenshots, logs, and dependency inventory without local credential files.
 
 ## Build, test, and recovery

@@ -48,7 +48,8 @@ function Update-ProcessPath {
         (Join-Path $env:ProgramFiles 'PowerShell\7'),
         (Join-Path $env:ProgramFiles 'Git\cmd'),
         (Join-Path $env:ProgramFiles 'MKVToolNix'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6')
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6')
     )
     $env:Path = (@($machine, $user) + $additional) -join ';'
 }
@@ -154,14 +155,55 @@ auth_key = "$secret"
     Protect-LocalFile $configPath
     if (Test-Path -LiteralPath ($configPath + '.previous')) { Protect-LocalFile ($configPath + '.previous') }
     Invoke-Native $mcp @('install', '--transport', 'streamable-http', '--host', '127.0.0.1', '--port', [string]$McpPort)
+    $mcpSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+        -RestartCount 3 -RestartInterval ([TimeSpan]::FromMinutes(1))
+    Set-ScheduledTask -TaskName 'windows-mcp-server' -Settings $mcpSettings | Out-Null
     $task = Get-ScheduledTask -TaskName 'windows-mcp-server' -ErrorAction Stop
     if ($changed -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName $task.TaskName; $task = Get-ScheduledTask -TaskName $task.TaskName }
     if ($task.State -ne 'Running') { Start-ScheduledTask -TaskName $task.TaskName }
     Write-Host ('MCP configured on guest loopback port {0}. Token is stored locally; it is not printed.' -f $McpPort)
 }
 
+function Set-RunnerAdmissionGuard {
+    $source = Join-Path $PSScriptRoot 'Assert-TrustedWindowsJob.ps1'
+    $tests = Join-Path $PSScriptRoot 'Test-TrustedWindowsJob.ps1'
+    if (-not (Test-Path -LiteralPath $source) -or -not (Test-Path -LiteralPath $tests)) {
+        throw 'Runner setup requires both trusted-job guard scripts beside the bootstrap script.'
+    }
+    $shell = Find-Tool 'pwsh.exe'
+    if (-not $shell) { throw 'PowerShell 7 is required before configuring the guarded runner.' }
+    & $shell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $tests -GuardPath $source
+    if ($LASTEXITCODE -ne 0) { throw 'Runner admission policy tests failed; runner was not started.' }
+    $guardDirectory = Join-Path $StateDirectory 'runner-hooks'
+    New-Item -ItemType Directory -Path $guardDirectory -Force | Out-Null
+    $target = Join-Path $guardDirectory 'Assert-TrustedWindowsJob.ps1'
+    Copy-Item -LiteralPath $source -Destination $target -Force
+    if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash) {
+        throw 'Installed runner guard hash mismatch.'
+    }
+    Protect-LocalFile $target
+    $environmentPath = Join-Path $RunnerDirectory '.env'
+    $lines = @()
+    if (Test-Path -LiteralPath $environmentPath) {
+        $lines = @(Get-Content -LiteralPath $environmentPath | Where-Object { $_ -notmatch '^(ACTIONS_RUNNER_HOOK_JOB_STARTED|PSExecutionPolicyPreference)=' })
+    }
+    $lines += 'ACTIONS_RUNNER_HOOK_JOB_STARTED=' + $target
+    $lines += 'PSExecutionPolicyPreference=RemoteSigned'
+    [IO.File]::WriteAllLines($environmentPath, [string[]]$lines, $utf8)
+    Protect-LocalFile $environmentPath
+}
+
 function Set-InteractiveRunner {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if (Get-Process -Name 'Runner.Worker' -ErrorAction SilentlyContinue) {
+        throw 'A runner job is active; finish it before reconfiguring runner admission.'
+    }
+    $existingTask = Get-ScheduledTask -TaskName 'FritzTV-GitHubRunner' -ErrorAction SilentlyContinue
+    if ($existingTask -and $existingTask.State -eq 'Running') { Stop-ScheduledTask -TaskName $existingTask.TaskName }
+    Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($RunnerDirectory + '\', [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     if (-not (Test-Path -LiteralPath (Join-Path $RunnerDirectory '.runner'))) {
         if (-not $RunnerTokenPath -or -not (Test-Path -LiteralPath $RunnerTokenPath)) {
             throw 'ConfigureRunner requires a machine-local RunnerTokenPath containing a short-lived repository registration token.'
@@ -181,12 +223,14 @@ function Set-InteractiveRunner {
             if ($LASTEXITCODE -ne 0) { throw 'GitHub runner registration failed.' }
         } finally { Pop-Location; $token = $null }
     }
+    Set-RunnerAdmissionGuard
     $taskName = 'FritzTV-GitHubRunner'
     $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument ('/d /c ""{0}""' -f (Join-Path $RunnerDirectory 'run.cmd')) -WorkingDirectory $RunnerDirectory
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 3 -RestartInterval ([TimeSpan]::FromMinutes(1)) -StartWhenAvailable
+        -RestartCount 3 -RestartInterval ([TimeSpan]::FromMinutes(1)) -StartWhenAvailable `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') { Start-ScheduledTask -TaskName $taskName }
 }
@@ -257,6 +301,8 @@ function Write-VerificationReport {
         AllRequiredToolsInstalled = (@($tools | Where-Object { -not $_.Installed }).Count -eq 0)
         McpTaskState = $(if ($mcpTask) { [string]$mcpTask.State } else { $null })
         RunnerTaskState = $(if ($runnerTask) { [string]$runnerTask.State } else { $null })
+        RunnerGuardPresent = (Test-Path -LiteralPath (Join-Path $StateDirectory 'runner-hooks\Assert-TrustedWindowsJob.ps1'))
+        RunnerGuardSha256 = $(if (Test-Path -LiteralPath (Join-Path $StateDirectory 'runner-hooks\Assert-TrustedWindowsJob.ps1')) { (Get-FileHash -LiteralPath (Join-Path $StateDirectory 'runner-hooks\Assert-TrustedWindowsJob.ps1') -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null })
         McpListeners = $listeners
         LiveStreamingValidated = $false
         DesktopControlValidated = $false

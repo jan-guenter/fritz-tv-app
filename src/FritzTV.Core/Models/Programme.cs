@@ -7,7 +7,10 @@ public sealed record Programme(
     TimeSpan Duration,
     string Title,
     string Description,
-    string Language)
+    string Language,
+    byte TableId = 0,
+    byte Version = 0,
+    bool IsActualTransport = true)
 {
     public DateTimeOffset End => Start + Duration;
 }

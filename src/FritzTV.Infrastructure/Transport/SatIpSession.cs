@@ -1,4 +1,5 @@
 using System.Globalization;
+using FritzTV.Core.Models;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -19,6 +20,8 @@ public sealed class SatIpSession : IAsyncDisposable
     private readonly Task receiveTask;
     private readonly Task controlTask;
     private readonly Task rtcpTask;
+    private readonly Task watchdogTask;
+    private long lastPacketAt = TimeProvider.System.GetTimestamp();
     private readonly TimeSpan keepaliveInterval;
     private long receivedPackets;
     private long receivedBytes;
@@ -36,6 +39,7 @@ public sealed class SatIpSession : IAsyncDisposable
         receiveTask = ReceiveAsync(lifetime.Token);
         controlTask = KeepAliveAsync(lifetime.Token);
         rtcpTask = ReceiveRtcpAsync(lifetime.Token);
+        watchdogTask = WatchReceptionAsync(lifetime.Token);
     }
 
     public long ReceivedPackets => Interlocked.Read(ref receivedPackets);
@@ -46,7 +50,13 @@ public sealed class SatIpSession : IAsyncDisposable
 
     public long LostPackets => reorder.LostPackets;
 
+    public ReceptionStatus? ReceptionStatus { get; private set; }
+
+    public Exception? RtcpFailure { get; private set; }
+
     public Exception? Failure { get; private set; }
+
+    public bool IsRunning => !receiveTask.IsCompleted && Failure is null;
 
     public event EventHandler<TransportDataEventArgs>? TransportReceived;
 
@@ -95,21 +105,36 @@ public sealed class SatIpSession : IAsyncDisposable
 
             return new SatIpSession(newRtp, newRtcp, newConnection, newSessionUri, newSessionId, keepalive);
         }
-        catch
+        catch (Exception exception)
         {
-            if (newConnection is not null)
+            await CleanupFailedOpenAsync(newConnection, tcp, newRtp, newRtcp).ConfigureAwait(false);
+            if (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                await newConnection.DisposeAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                tcp.Dispose();
+                throw new IOException("The SAT>IP connection timed out.", exception);
             }
 
-            newRtp.Dispose();
-            newRtcp.Dispose();
+            if (exception is SocketException)
+            {
+                throw new IOException("The SAT>IP server could not be reached.", exception);
+            }
+
             throw;
         }
+    }
+
+    private static async Task CleanupFailedOpenAsync(RtspConnection? failedConnection, TcpClient failedClient, UdpClient failedRtp, UdpClient failedRtcp)
+    {
+        if (failedConnection is not null)
+        {
+            await failedConnection.DisposeAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            failedClient.Dispose();
+        }
+
+        failedRtp.Dispose();
+        failedRtcp.Dispose();
     }
 
     public TransportSubscription Subscribe(int capacity = 2048, bool discardOldest = false)
@@ -173,6 +198,13 @@ public sealed class SatIpSession : IAsyncDisposable
         }
     }
 
+    internal void Abort(Exception reason)
+    {
+        Failure = reason;
+        CompleteConsumers(reason);
+        lifetime.Cancel();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (disposed)
@@ -184,7 +216,7 @@ public sealed class SatIpSession : IAsyncDisposable
         await lifetime.CancelAsync().ConfigureAwait(false);
         try
         {
-            await Task.WhenAll(receiveTask, controlTask, rtcpTask).ConfigureAwait(false);
+            await Task.WhenAll(receiveTask, controlTask, rtcpTask, watchdogTask).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -240,6 +272,7 @@ public sealed class SatIpSession : IAsyncDisposable
                     continue;
                 }
 
+                Interlocked.Exchange(ref lastPacketAt, TimeProvider.System.GetTimestamp());
                 Interlocked.Increment(ref receivedPackets);
                 Interlocked.Add(ref receivedBytes, packet.Payload.Length);
                 foreach (var ready in reorder.Push(packet))
@@ -298,9 +331,10 @@ public sealed class SatIpSession : IAsyncDisposable
             while (!cancellationToken.IsCancellationRequested)
             {
                 var datagram = await rtcp.ReceiveAsync(cancellationToken).ConfigureAwait(false);
-                if (datagram.Buffer.Length >= 4 && datagram.Buffer[0] >> 6 == 2)
+                if (RtcpAnnouncementParser.TryParse(datagram.Buffer, out var status))
                 {
                     Interlocked.Increment(ref rtcpPackets);
+                    ReceptionStatus = status ?? ReceptionStatus;
                 }
             }
         }
@@ -309,7 +343,30 @@ public sealed class SatIpSession : IAsyncDisposable
         }
         catch (SocketException exception)
         {
-            Failure = exception;
+            RtcpFailure = exception;
+        }
+    }
+
+    private async Task WatchReceptionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (TimeProvider.System.GetElapsedTime(Interlocked.Read(ref lastPacketAt)) < TimeSpan.FromSeconds(10))
+                {
+                    continue;
+                }
+
+                Failure = new IOException("No valid MPEG transport packets have arrived for ten seconds.");
+                CompleteConsumers(Failure);
+                await lifetime.CancelAsync().ConfigureAwait(false);
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 

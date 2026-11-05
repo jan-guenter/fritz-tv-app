@@ -29,7 +29,19 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public void TogglePause() { }
+    public Task TogglePauseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task PlayFileAsync(string path, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task SeekAsync(DateTimeOffset? position, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public PlaybackSnapshot? GetSnapshot() => null;
+
+    public IReadOnlyList<Programme> Guide => [];
+
+    public TvChannel? CurrentChannel => null;
+
+    public int? CurrentServiceId => null;
 
     public void SetVolume(int volume) => Volume = volume;
 

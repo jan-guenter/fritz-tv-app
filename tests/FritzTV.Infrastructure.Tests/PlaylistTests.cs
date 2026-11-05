@@ -26,6 +26,15 @@ public sealed class PlaylistTests
     }
 
     [Fact]
+    public void ChannelIdentitySurvivesElementaryPidListChanges()
+    {
+        var device = Guid.NewGuid();
+        var first = Assert.Single(M3uPlaylistParser.Parse("#EXTINF:0,Stable channel\nrtsp://192.0.2.1/?freq=386&pids=0,18,100,101", device, ChannelKind.Television));
+        var refreshed = Assert.Single(M3uPlaylistParser.Parse("#EXTINF:0,Stable channel\nrtsp://192.0.2.1/?freq=386&pids=0,18,100,102,103", device, ChannelKind.Television));
+        Assert.Equal(first.Id, refreshed.Id, StringComparer.Ordinal);
+    }
+
+    [Fact]
     public void SsdpAcceptsCaseInsensitiveLocationAndRejectsFileUris()
     {
         var location = SsdpDiscovery.ParseLocation(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nlocation: http://192.0.2.1:49000/satipdesc.xml\r\n\r\n"));

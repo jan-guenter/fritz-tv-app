@@ -35,6 +35,20 @@ internal static class DvbFixtures
         return CompleteSection(data);
     }
 
+    public static byte[] Sdt()
+    {
+        var provider = Encoding.UTF8.GetBytes("Test broadcaster");
+        var name = Encoding.UTF8.GetBytes("Synthetic service");
+        var body = new List<byte> { 1, (byte)(provider.Length + 1), 0x15 };
+        body.AddRange(provider);
+        body.Add((byte)(name.Length + 1));
+        body.Add(0x15);
+        body.AddRange(name);
+        var data = new List<byte> { 0x42, 0xb0, 0, 0x04, 0x4d, 0xc1, 0, 0, 0, 1, 0xff, 0x28, 0x3d, 0xff, 0x80, (byte)(body.Count + 2), 0x48, (byte)body.Count };
+        data.AddRange(body);
+        return CompleteSection(data);
+    }
+
     public static IReadOnlyList<byte[]> Packetize(byte[] section, int pid, int continuity = 0)
     {
         var packets = new List<byte[]>();

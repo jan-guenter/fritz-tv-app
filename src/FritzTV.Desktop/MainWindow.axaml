@@ -5,7 +5,7 @@
         xmlns:services="using:FritzTV.Desktop.Services"
         x:Class="FritzTV.Desktop.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="FRITZ TV" Width="1240" Height="820" MinWidth="900" MinHeight="650"
+        Title="FRITZ TV" Width="1100" Height="720" MinWidth="900" MinHeight="580" WindowStartupLocation="CenterScreen"
         AutomationProperties.AutomationId="MainWindow">
   <Grid RowDefinitions="Auto,*,Auto" Margin="22" RowSpacing="16">
     <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
@@ -38,7 +38,7 @@
           </ListBox>
         </Grid>
       </Border>
-      <Grid Grid.Column="1" RowDefinitions="*,Auto,Auto,Auto,Auto" RowSpacing="12">
+      <Grid Grid.Column="1" RowDefinitions="*,Auto,Auto,Auto,Auto,Auto" RowSpacing="12">
         <Border Background="#10151D" CornerRadius="12" ClipToBounds="True">
           <ContentControl x:Name="VideoHost" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" AutomationProperties.AutomationId="VideoSurface">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
@@ -49,12 +49,18 @@
         </Border>
         <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
           <Button Content="{Binding Text[Play]}" Command="{Binding PlayCommand}" AutomationProperties.AutomationId="Play" />
-          <Button Grid.Column="1" Content="{Binding Text[Pause]}" Command="{Binding PauseCommand}" AutomationProperties.AutomationId="Pause" />
+          <Button Grid.Column="1" Content="{Binding PauseButtonText}" Command="{Binding PauseCommand}" AutomationProperties.AutomationId="Pause" />
           <Button Grid.Column="2" Content="{Binding Text[Stop]}" Command="{Binding StopCommand}" AutomationProperties.AutomationId="Stop" />
           <Slider Grid.Column="3" Minimum="0" Maximum="100" Value="{Binding Volume}" Margin="16,0" AutomationProperties.AutomationId="Volume" />
           <Button Grid.Column="4" Content="{Binding Text[Fullscreen]}" Click="OnFullscreenClick" AutomationProperties.AutomationId="Fullscreen" />
         </Grid>
-        <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="12">
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding HasPlayback}">
+          <Slider Value="{Binding TimelinePosition}" Maximum="{Binding TimelineMaximum}" Minimum="0"
+                  PointerPressed="OnTimelinePressed" PointerReleased="OnTimelineReleased" AutomationProperties.AutomationId="Timeline" />
+          <TextBlock Grid.Column="1" Text="{Binding TimelineLabel}" VerticalAlignment="Center" />
+          <Button Grid.Column="2" Content="{Binding Text[GoLive]}" Command="{Binding GoLiveCommand}" AutomationProperties.AutomationId="GoLive" />
+        </Grid>
+        <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12">
           <ComboBox ItemsSource="{Binding AudioTracks}" SelectedItem="{Binding SelectedAudioTrack}" HorizontalAlignment="Stretch"
                     PlaceholderText="{Binding Text[AudioTrack]}" AutomationProperties.AutomationId="AudioTracks">
             <ComboBox.ItemTemplate><DataTemplate x:DataType="services:PlaybackTrack"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
@@ -64,7 +70,7 @@
             <ComboBox.ItemTemplate><DataTemplate x:DataType="services:PlaybackTrack"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
           </ComboBox>
         </Grid>
-        <WrapPanel Grid.Row="3" Orientation="Horizontal">
+        <WrapPanel Grid.Row="4" Orientation="Horizontal">
           <TextBlock Text="{Binding Text[Teletext]}" VerticalAlignment="Center" Margin="0,0,8,0" />
           <TextBox Text="{Binding TeletextPage}" Width="65" MaxLength="3" AutomationProperties.AutomationId="TeletextPage" />
           <Button Content="{Binding Text[Open]}" Command="{Binding ShowTeletextCommand}" Margin="6,0" AutomationProperties.AutomationId="TeletextOpen" />
@@ -75,7 +81,29 @@
           <Button Background="#245FA3" Content="●" Command="{Binding NavigateTeletextCommand}" CommandParameter="Blue" AutomationProperties.Name="{Binding Text[BlueTeletextKey]}" />
           <Button Content="{Binding Text[Transparency]}" Command="{Binding ToggleTeletextTransparencyCommand}" Margin="6,0" />
         </WrapPanel>
-        <Expander Grid.Row="4" Header="{Binding Text[Settings]}" HorizontalAlignment="Stretch">
+        <Expander Grid.Row="5" Header="{Binding Text[GuideAndSettings]}" HorizontalAlignment="Stretch">
+          <TabControl>
+            <TabItem Header="{Binding Text[Guide]}">
+              <Grid RowDefinitions="Auto,*,Auto" Height="240" RowSpacing="8">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding GuideSearch}" PlaceholderText="{Binding Text[SearchGuide]}" AutomationProperties.AutomationId="GuideSearch" />
+                  <Button Grid.Column="1" Content="{Binding Text[RefreshGuide]}" Command="{Binding RefreshGuideCommand}" AutomationProperties.AutomationId="RefreshGuide" />
+                </Grid>
+                <ListBox Grid.Row="1" ItemsSource="{Binding Programmes}" SelectedItem="{Binding SelectedProgramme}" AutomationProperties.AutomationId="Programmes">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ProgrammeItem">
+                      <StackPanel Spacing="3" Margin="4">
+                        <TextBlock Text="{Binding LocalStart, StringFormat={}{0:g}}" Opacity="0.7" FontSize="12" />
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" MaxLines="2" Opacity="0.7" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock Grid.Row="2" Text="{Binding Text[GuideHint]}" Opacity="0.65" TextWrapping="Wrap" FontSize="12" />
+              </Grid>
+            </TabItem>
+            <TabItem Header="{Binding Text[Settings]}">
           <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
             <TextBlock Text="{Binding Text[RecordingFolder]}" VerticalAlignment="Center" />
             <TextBox Grid.Column="1" Text="{Binding RecordingDirectory}" AutomationProperties.AutomationId="RecordingDirectory" />
@@ -91,6 +119,8 @@
             <CheckBox Grid.Row="3" Content="{Binding Text[StartAtLogin]}" IsChecked="{Binding StartAtLogin}" AutomationProperties.AutomationId="StartAtLogin" />
             <Button Grid.Row="3" Grid.Column="1" Content="{Binding Text[SaveSettings]}" Command="{Binding SaveSettingsCommand}" HorizontalAlignment="Right" AutomationProperties.AutomationId="SaveSettings" />
           </Grid>
+            </TabItem>
+          </TabControl>
         </Expander>
       </Grid>
     </Grid>

@@ -1,3 +1,5 @@
+using FritzTV.Core.Models;
+
 namespace FritzTV.Probe;
 
 internal sealed record ProbeReport(
@@ -11,6 +13,8 @@ internal sealed record ProbeReport(
     long ReceivedPackets,
     long ReceivedBytes,
     long RtcpPackets,
+    ReceptionStatus? ReceptionStatus,
+    string? RtcpFailure,
     long LostPackets,
     string? Failure,
     long TransportPacketCount,

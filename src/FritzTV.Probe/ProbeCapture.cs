@@ -49,7 +49,7 @@ internal static class ProbeCapture
         }
 
         return new ProbeReport(DateTimeOffset.UtcNow, RuntimeInformation.FrameworkDescription, RuntimeInformation.OSDescription,
-            device.Name, device.TunerCount, channel.Name, duration, session.ReceivedPackets, session.ReceivedBytes, session.RtcpPackets,
+            device.Name, device.TunerCount, channel.Name, duration, session.ReceivedPackets, session.ReceivedBytes, session.RtcpPackets, session.ReceptionStatus, session.RtcpFailure?.Message,
             session.LostPackets, session.Failure?.Message, stats.Pids.Values.Sum(), stats.Pids, stats.TableCounts, stats.Programs, stats.StreamTypes);
     }
 

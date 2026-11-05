@@ -16,7 +16,7 @@
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="LibVLCSharp.Avalonia" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Condition="'$(RuntimeIdentifier)' == 'win-x64' or $([MSBuild]::IsOSPlatform('Windows'))" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" PrivateAssets="all" Condition="'$(RuntimeIdentifier)' == 'win-x64' or $([MSBuild]::IsOSPlatform('Windows'))" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <ProjectReference Include="../FritzTV.Core/FritzTV.Core.csproj" />
     <ProjectReference Include="../FritzTV.Infrastructure/FritzTV.Infrastructure.csproj" />

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using FritzTV.Core.Models;
+using FritzTV.Infrastructure.Transport;
 
 namespace FritzTV.Infrastructure.Devices;
 
@@ -38,11 +39,11 @@ public static class M3uPlaylistParser
                 continue;
             }
 
-            var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{deviceId:D}|{uri.AbsoluteUri}")));
+            var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{deviceId:D}|{SatIpTuning.Key(uri)}|{name?.Normalize(NormalizationForm.FormC)}")));
             channels.Add(new TvChannel(identity, deviceId, name ?? uri.AbsoluteUri, kind, uri));
             name = null;
         }
 
-        return channels.DistinctBy(channel => channel.Id, StringComparer.Ordinal).ToArray();
+        return channels.DistinctBy(channel => channel.StreamUri.AbsoluteUri, StringComparer.Ordinal).DistinctBy(channel => channel.Id, StringComparer.Ordinal).ToArray();
     }
 }

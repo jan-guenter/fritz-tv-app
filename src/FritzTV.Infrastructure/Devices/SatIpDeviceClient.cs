@@ -19,7 +19,7 @@ public sealed class SatIpDeviceClient(HttpClient httpClient)
         var device = document.Descendants().FirstOrDefault(element => string.Equals(element.Name.LocalName, "device", StringComparison.Ordinal))
             ?? throw new InvalidDataException("The descriptor has no UPnP device.");
         var deviceType = Child(device, "deviceType");
-        if (!deviceType.Contains("SatIPServer", StringComparison.OrdinalIgnoreCase))
+        if (!deviceType.StartsWith("urn:ses-com:device:SatIPServer:", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("The UPnP device is not a SAT>IP server.");
         }
@@ -51,7 +51,7 @@ public sealed class SatIpDeviceClient(HttpClient httpClient)
         return new SatIpDevice(id, udn, Child(device, "friendlyName"), descriptorUri,
             string.IsNullOrWhiteSpace(playlistText) ? null : ResolveHttpUri(baseUri, playlistText),
             string.IsNullOrWhiteSpace(controlText) ? null : ResolveHttpUri(baseUri, controlText),
-            tunerCount == 0 ? 1 : tunerCount);
+            Math.Clamp(tunerCount, 1, 64));
     }
 
     public async Task<IReadOnlyList<TvChannel>> GetChannelsAsync(SatIpDevice device, CancellationToken cancellationToken = default)
@@ -114,23 +114,64 @@ public sealed class SatIpDeviceClient(HttpClient httpClient)
         return XDocument.Load(reader);
     }
 
+    public async Task<IReadOnlyList<TunerStatus>> GetTunerStatusAsync(SatIpDevice device, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var result = new List<TunerStatus>();
+        if (device.ControlUri is null)
+        {
+            return result;
+        }
+
+        for (var number = 0; number < Math.Min(device.TunerCount, 64); number++)
+        {
+            var response = await InvokeActionAsync(device.ControlUri, "X_AVM-DE_GetTunerInfo", new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["NewX_AVM-DE_TunerNumber"] = number.ToString(CultureInfo.InvariantCulture),
+            }, cancellationToken).ConfigureAwait(false);
+            if (response is null)
+            {
+                break;
+            }
+
+            var fields = response.Descendants().Where(element => !element.HasElements).ToDictionary(element => element.Name.LocalName, element => element.Value, StringComparer.Ordinal);
+            result.Add(new TunerStatus(number, IsTrue(fields.GetValueOrDefault("NewX_AVM-DE_Used")), IsTrue(fields.GetValueOrDefault("NewX_AVM-DE_HasLock")),
+                fields.GetValueOrDefault("NewX_AVM-DE_SignalPower") ?? string.Empty, fields.GetValueOrDefault("NewX_AVM-DE_SignalNoiseRatio") ?? string.Empty,
+                fields.GetValueOrDefault("NewX_AVM-DE_ChannelName") ?? string.Empty,
+                int.TryParse(fields.GetValueOrDefault("NewX_AVM-DE_ClientCount"), NumberStyles.None, CultureInfo.InvariantCulture, out var clients) ? clients : 0));
+        }
+
+        return result;
+    }
+
+    private static bool IsTrue(string? value) => string.Equals(value, "1", StringComparison.Ordinal) || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+
     private async Task<Uri?> GetPlaylistUriAsync(Uri controlUri, string action, CancellationToken cancellationToken)
+    {
+        var response = await InvokeActionAsync(controlUri, action, null, cancellationToken).ConfigureAwait(false);
+        var value = response?.Descendants().FirstOrDefault(element => string.Equals(element.Name.LocalName, "NewX_AVM-DE_Url", StringComparison.Ordinal))?.Value;
+        return string.IsNullOrWhiteSpace(value) ? null : ResolveHttpUri(controlUri, value);
+    }
+
+    private async Task<XDocument?> InvokeActionAsync(Uri controlUri, string action, IReadOnlyDictionary<string, string>? arguments, CancellationToken cancellationToken)
     {
         XNamespace soap = "http://schemas.xmlsoap.org/soap/envelope/";
         XNamespace service = SatIpService;
-        var body = new XDocument(new XElement(soap + "Envelope", new XAttribute(XNamespace.Xmlns + "s", soap), new XElement(soap + "Body", new XElement(service + action))));
+        var invocation = new XElement(service + action);
+        if (arguments is not null)
+        {
+            foreach (var (name, value) in arguments)
+            {
+                invocation.Add(new XElement(name, value));
+            }
+        }
+
+        var body = new XDocument(new XElement(soap + "Envelope", new XAttribute(XNamespace.Xmlns + "s", soap), new XElement(soap + "Body", invocation)));
         using var request = new HttpRequestMessage(HttpMethod.Post, controlUri);
         request.Headers.TryAddWithoutValidation("SOAPACTION", $"\"{SatIpService}#{action}\"");
         request.Content = new StringContent(body.ToString(SaveOptions.DisableFormatting), Encoding.UTF8, "text/xml");
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            return null;
-        }
-
-        var xml = ParseXml(await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false));
-        var value = xml.Descendants().FirstOrDefault(element => string.Equals(element.Name.LocalName, "NewX_AVM-DE_Url", StringComparison.Ordinal))?.Value;
-        return string.IsNullOrWhiteSpace(value) ? null : ResolveHttpUri(controlUri, value);
+        return response.IsSuccessStatusCode ? ParseXml(await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false)) : null;
     }
 
     private async Task<string> ReadTextAsync(Uri uri, CancellationToken cancellationToken)

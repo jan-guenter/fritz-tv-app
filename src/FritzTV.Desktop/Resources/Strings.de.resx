@@ -49,4 +49,15 @@
   <data name="GreenTeletextKey" xml:space="preserve"><value>Grüne Videotexttaste</value></data>
   <data name="YellowTeletextKey" xml:space="preserve"><value>Gelbe Videotexttaste</value></data>
   <data name="BlueTeletextKey" xml:space="preserve"><value>Blaue Videotexttaste</value></data>
+  <data name="Resume" xml:space="preserve"><value>Fortsetzen</value></data>
+  <data name="Live" xml:space="preserve"><value>Live</value></data>
+  <data name="BehindLive" xml:space="preserve"><value>{0} hinter Live</value></data>
+  <data name="GoLive" xml:space="preserve"><value>Zu Live</value></data>
+  <data name="BufferExpired" xml:space="preserve"><value>Die pausierte Position ist abgelaufen. Fortsetzen beginnt an der ältesten gespeicherten Stelle.</value></data>
+  <data name="ReceptionFailed" xml:space="preserve"><value>Empfang fehlgeschlagen.</value></data>
+  <data name="Guide" xml:space="preserve"><value>Programmübersicht</value></data>
+  <data name="GuideAndSettings" xml:space="preserve"><value>Programmübersicht und Einstellungen</value></data>
+  <data name="SearchGuide" xml:space="preserve"><value>Sendungen suchen</value></data>
+  <data name="RefreshGuide" xml:space="preserve"><value>Programm neu laden</value></data>
+  <data name="GuideHint" xml:space="preserve"><value>Die Programmdaten hängen vom Sender ab. Einen Sender auswählen und wiedergeben, um dessen Programminformationen zu laden.</value></data>
 </root>

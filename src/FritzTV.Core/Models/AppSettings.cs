@@ -8,9 +8,11 @@ public sealed record AppSettings
 
     public bool StartAtLogin { get; init; }
 
+    public bool RetainTransportStreams { get; init; }
+
     public string RecordingDirectory { get; init; } = DefaultRecordingDirectory();
 
-    public string BufferDirectory { get; init; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FritzTV", "timeshift");
+    public string BufferDirectory { get; init; } = DefaultBufferDirectory();
 
     public TimeSpan TimeshiftDuration { get; init; } = TimeSpan.FromHours(1);
 
@@ -23,6 +25,18 @@ public sealed record AppSettings
     public int RtpFirstPort { get; init; } = 50000;
 
     public int RtpLastPort { get; init; } = 50127;
+    private static string DefaultBufferDirectory()
+    {
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrEmpty(appData))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            appData = OperatingSystem.IsWindows() ? Path.Combine(home, "AppData", "Local") : Path.Combine(home, ".local", "share");
+        }
+
+        return Path.Combine(appData, "FritzTV", "timeshift");
+    }
+
     private static string DefaultRecordingDirectory()
     {
         var videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);

@@ -1,14 +1,20 @@
 using FritzTV.Core.Models;
+using FritzTV.Core.Exceptions;
 using FritzTV.Infrastructure.Dvb;
 using FritzTV.Infrastructure.Timeshift;
 using FritzTV.Infrastructure.Transport;
+using FritzTV.Infrastructure.Persistence;
 
 namespace FritzTV.Infrastructure.Playback;
 
 public sealed class BufferedPlayback : IAsyncDisposable
 {
-    private readonly ChannelLease lease;
+    private ChannelLease lease;
+    private readonly SatIpSessionManager manager;
+    private readonly SatIpDevice device;
     private readonly Guid deviceId;
+    private readonly DvbChannelResolver resolver;
+    private TvChannel resolvedChannel;
     private readonly string directory;
     private readonly CancellationTokenSource lifetime = new();
     private readonly PsiSectionAssembler assembler = new();
@@ -18,11 +24,16 @@ public sealed class BufferedPlayback : IAsyncDisposable
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task receiveTask;
     private int disposed;
+    private int references = 1;
 
-    private BufferedPlayback(ChannelLease lease, AppSettings settings)
+    private BufferedPlayback(ChannelLease lease, AppSettings settings, SatIpSessionManager manager, SatIpDevice device)
     {
         this.lease = lease;
+        this.manager = manager;
+        this.device = device;
         deviceId = lease.Channel.DeviceId;
+        resolvedChannel = lease.Channel;
+        resolver = new DvbChannelResolver(deviceId);
         directory = Path.Combine(settings.BufferDirectory, Guid.NewGuid().ToString("N", System.Globalization.CultureInfo.InvariantCulture));
         Buffer = new IndexedTimeshiftBuffer(directory, settings.TimeshiftDuration, settings.TimeshiftBytes, settings.FreeSpaceReserveBytes);
         assembler.SectionReceived += OnSectionReceived;
@@ -31,11 +42,13 @@ public sealed class BufferedPlayback : IAsyncDisposable
 
     public IndexedTimeshiftBuffer Buffer { get; }
 
-    public TvChannel Channel => lease.Channel;
+    public TvChannel Channel => resolvedChannel;
 
     public ProgrammeMap? Programme { get; private set; }
 
     public Exception? Failure { get; private set; }
+
+    public long DiscontinuityCount { get; private set; }
 
     public bool IsRunning => !receiveTask.IsCompleted;
 
@@ -50,29 +63,68 @@ public sealed class BufferedPlayback : IAsyncDisposable
         }
     }
 
-    public static async Task<BufferedPlayback> StartAsync(SatIpSessionManager manager, SatIpDevice device, TvChannel channel, AppSettings settings, CancellationToken cancellationToken = default)
+    public static Task<BufferedPlayback> StartAsync(SatIpSessionManager manager, SatIpDevice device, TvChannel channel, AppSettings settings, CancellationToken cancellationToken = default) => StartAsync(manager, device, channel, settings, null, cancellationToken);
+
+    public static async Task<BufferedPlayback> StartAsync(SatIpSessionManager manager, SatIpDevice device, TvChannel channel, AppSettings settings, AppRepository? repository, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manager);
         ArgumentNullException.ThrowIfNull(settings);
         var acquiredLease = await manager.AcquireAsync(device, channel, TunerPriority.Viewing, cancellationToken).ConfigureAwait(false);
-        var playback = new BufferedPlayback(acquiredLease, settings);
+        BufferedPlayback? playback = null;
         try
         {
+            playback = new BufferedPlayback(acquiredLease, settings, manager, device);
             await playback.ready.Task.WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+            if (repository is not null && playback.resolver.Resolve(channel) is { } identity)
+            {
+                playback.resolvedChannel = await repository.ResolveChannelAsync(channel.Id, identity, cancellationToken).ConfigureAwait(false);
+            }
+
             return playback;
         }
         catch
         {
-            await playback.DisposeAsync().ConfigureAwait(false);
+            if (playback is not null)
+            {
+                await playback.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await acquiredLease.DisposeAsync().ConfigureAwait(false);
+            }
+
             throw;
         }
     }
 
+    public IAsyncDisposable Retain()
+    {
+        lock (metadataLock)
+        {
+            ObjectDisposedException.ThrowIf(disposed != 0, this);
+            references++;
+        }
+
+        return new PlaybackRetention(this);
+    }
+
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        if (Interlocked.Exchange(ref disposed, 1) == 0)
         {
-            return;
+            Buffer.ReleaseViewingRetention();
+            await ReleaseReferenceAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask ReleaseReferenceAsync()
+    {
+        lock (metadataLock)
+        {
+            if (--references != 0)
+            {
+                return;
+            }
         }
 
         await lifetime.CancelAsync().ConfigureAwait(false);
@@ -95,29 +147,97 @@ public sealed class BufferedPlayback : IAsyncDisposable
     {
         try
         {
-            await foreach (var batch in lease.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var decodable = InspectTransport(batch);
-                await Buffer.AppendAsync(batch, cancellationToken).ConfigureAwait(false);
-                if (Programme is not null && decodable)
+                try
                 {
-                    ready.TrySetResult();
+                    await ReadLeaseAsync(cancellationToken).ConfigureAwait(false);
                 }
-            }
+                catch (TimeshiftStorageException exception)
+                {
+                    Failure = exception;
+                    ready.TrySetException(exception);
+                    return;
+                }
+                catch (TunerUnavailableException exception)
+                {
+                    Failure = exception;
+                    ready.TrySetException(exception);
+                    return;
+                }
+                catch (Exception exception) when (exception is IOException or InvalidOperationException)
+                {
+                    Failure = exception;
+                    DiscontinuityCount++;
+                    if (!ready.Task.IsCompletedSuccessfully)
+                    {
+                        ready.TrySetException(exception);
+                        return;
+                    }
 
-            if (!cancellationToken.IsCancellationRequested)
-            {
-                throw new IOException("The tuner stream ended before viewing was stopped.");
+                    await ReconnectAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ready.TrySetCanceled(cancellationToken);
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or System.Threading.Channels.ChannelClosedException)
+        catch (TunerUnavailableException exception)
         {
             Failure = exception;
-            ready.TrySetException(exception);
+        }
+        finally
+        {
+            await Buffer.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task ReadLeaseAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var batch in lease.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var decodable = InspectTransport(batch);
+            try
+            {
+                await Buffer.AppendAsync(batch, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new TimeshiftStorageException(exception.Message, exception);
+            }
+
+            if (Programme is not null && decodable && Buffer.CanStartPlayback)
+            {
+                ready.TrySetResult();
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new IOException("The tuner stream ended before viewing was stopped.");
+    }
+
+    private async Task ReconnectAsync(CancellationToken cancellationToken)
+    {
+        await lease.DisposeAsync().ConfigureAwait(false);
+        var attempt = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(attempt++, 5))), cancellationToken).ConfigureAwait(false);
+            try
+            {
+                lease = await manager.AcquireAsync(device, Channel, TunerPriority.Viewing, cancellationToken).ConfigureAwait(false);
+                Failure = null;
+                return;
+            }
+            catch (TunerUnavailableException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                Failure = exception;
+            }
         }
     }
 
@@ -146,6 +266,7 @@ public sealed class BufferedPlayback : IAsyncDisposable
     private void OnSectionReceived(object? sender, PsiSectionEventArgs section)
     {
         var data = section.Data.Span;
+        resolver.Observe(section);
         if (data[0] == 0)
         {
             foreach (var (id, pid) in ProgrammeMapParser.ParsePat(data))
@@ -170,4 +291,17 @@ public sealed class BufferedPlayback : IAsyncDisposable
             }
         }
     }
+    private sealed class PlaybackRetention(BufferedPlayback owner) : IAsyncDisposable
+    {
+        private int released;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref released, 1) == 0)
+            {
+                await owner.ReleaseReferenceAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
 }

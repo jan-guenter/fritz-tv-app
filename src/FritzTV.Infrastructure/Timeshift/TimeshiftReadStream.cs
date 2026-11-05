@@ -8,20 +8,28 @@ public sealed class TimeshiftReadStream : Stream
     private int prefixOffset;
     private long segmentId;
     private long offset;
+    private readonly Guid? pinId;
+    private bool disposed;
 
-    internal TimeshiftReadStream(IndexedTimeshiftBuffer owner, long segmentId, long offset, DateTimeOffset actualStart, byte[] prefix, CancellationToken cancellationToken)
+    internal TimeshiftReadStream(IndexedTimeshiftBuffer owner, long segmentId, long offset, DateTimeOffset actualStart, byte[] prefix, Guid? pinId, DateTimeOffset targetStart, CancellationToken cancellationToken)
     {
         this.owner = owner;
         this.segmentId = segmentId;
         this.offset = offset;
         this.prefix = prefix;
+        this.pinId = pinId;
         ActualStart = actualStart;
+        TargetStart = targetStart;
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
     }
 
     public DateTimeOffset ActualStart { get; }
 
-    public override bool CanRead => true;
+    public DateTimeOffset TargetStart { get; }
+
+    public TimeSpan WarmupDuration => TargetStart > ActualStart ? TargetStart - ActualStart : TimeSpan.Zero;
+
+    public override bool CanRead => !disposed;
 
     public override bool CanSeek => false;
 
@@ -39,6 +47,7 @@ public sealed class TimeshiftReadStream : Stream
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         if (buffer.IsEmpty)
         {
             return 0;
@@ -53,7 +62,7 @@ public sealed class TimeshiftReadStream : Stream
             return count;
         }
 
-        var result = await owner.ReadAsync(segmentId, offset, buffer, combined.Token).ConfigureAwait(false);
+        var result = await owner.ReadAsync(segmentId, offset, buffer, pinId, combined.Token).ConfigureAwait(false);
         segmentId = result.SegmentId;
         offset = result.Offset;
         return result.Count;
@@ -71,8 +80,14 @@ public sealed class TimeshiftReadStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !disposed)
         {
+            disposed = true;
+            if (pinId is { } identifier)
+            {
+                owner.Unpin(identifier);
+            }
+
             lifetime.Cancel();
             lifetime.Dispose();
         }

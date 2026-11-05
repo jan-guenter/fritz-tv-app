@@ -15,12 +15,19 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
     private readonly Lock stateLock = new();
     private readonly List<BufferSegment> segments = [];
     private readonly Dictionary<int, byte[]> programmeTables = [];
+    private readonly Dictionary<Guid, long> pins = [];
+    private readonly PsiSectionAssembler tableAssembler = new();
+    private readonly ProgrammeClock programmeClock = new();
+    private int? pcrPid;
+    private DateTimeOffset? programmePosition;
     private FileStream? writer;
     private long nextSegmentId;
     private long totalBytes;
     private long lastFlush;
     private bool completed;
+    private bool recordingOnly;
     private int? videoPid;
+    private int? audioPid;
     private int? pmtPid;
 
     public IndexedTimeshiftBuffer(string directory, TimeSpan? retention = null, long byteLimit = 10L * 1024 * 1024 * 1024, long freeSpaceReserve = 1024L * 1024 * 1024, TimeProvider? timeProvider = null)
@@ -37,6 +44,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         this.byteLimit = byteLimit;
         this.freeSpaceReserve = freeSpaceReserve;
         clock = timeProvider ?? TimeProvider.System;
+        tableAssembler.SectionReceived += OnTableSectionReceived;
         Directory.CreateDirectory(this.directory);
         if (Directory.EnumerateFileSystemEntries(this.directory).Any())
         {
@@ -50,7 +58,26 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         {
             lock (stateLock)
             {
-                return segments.Count == 0 ? null : new TimeshiftRange(segments[0].Start, segments[^1].End, totalBytes);
+                if (segments.Count == 0)
+                {
+                    return null;
+                }
+
+                var visible = VisibleSegments();
+                var entries = visible.SelectMany(segment => segment.Entries).ToArray();
+                var earliest = entries.Length > 0 ? entries[videoPid is not null && entries.Length > 1 ? 1 : 0].At : visible[0].Start;
+                return new TimeshiftRange(earliest, segments[^1].End, totalBytes);
+            }
+        }
+    }
+
+    public bool CanStartPlayback
+    {
+        get
+        {
+            lock (stateLock)
+            {
+                return videoPid is null ? totalBytes > 0 : segments.Sum(segment => segment.Entries.Count) >= 2;
             }
         }
     }
@@ -61,7 +88,13 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         lock (stateLock)
         {
             pmtPid = programme.PmtPid;
+            pcrPid = programme.PcrPid;
+            foreach (var oldPid in programmeTables.Keys.Where(pid => pid != 0 && pid != pmtPid).ToArray())
+            {
+                programmeTables.Remove(oldPid);
+            }
             videoPid = programme.Streams.FirstOrDefault(item => item.StreamType is 0x01 or 0x02 or 0x10 or 0x1b or 0x24)?.Pid;
+            audioPid = programme.Streams.FirstOrDefault(item => (item.StreamType is 0x03 or 0x04 or 0x0f or 0x11 or 0x06) && !item.IsTeletext && !item.IsDvbSubtitle)?.Pid;
         }
     }
 
@@ -98,7 +131,27 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         }
     }
 
-    public TimeshiftReadStream OpenReader(DateTimeOffset? requested = null, CancellationToken cancellationToken = default)
+    public TimeshiftReadStream OpenReader(DateTimeOffset? requested = null, CancellationToken cancellationToken = default) => OpenReaderCore(requested, false, cancellationToken);
+
+    public TimeshiftReadStream OpenPinnedReader(DateTimeOffset? requested = null, CancellationToken cancellationToken = default) => OpenReaderCore(requested, true, cancellationToken);
+
+    public void ReleaseViewingRetention()
+    {
+        lock (stateLock)
+        {
+            recordingOnly = true;
+        }
+    }
+
+    internal void Unpin(Guid id)
+    {
+        lock (stateLock)
+        {
+            pins.Remove(id);
+        }
+    }
+
+    private TimeshiftReadStream OpenReaderCore(DateTimeOffset? requested, bool pin, CancellationToken cancellationToken)
     {
         lock (stateLock)
         {
@@ -107,18 +160,24 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 throw new InvalidOperationException("The timeshift buffer has no transport data yet.");
             }
 
+            var available = pin ? segments.ToArray() : VisibleSegments();
             var at = requested ?? segments[^1].End;
-            var candidates = segments.SelectMany(segment => segment.Entries.Select(entry => (Segment: segment, Entry: entry))).ToArray();
-            var selected = candidates.LastOrDefault(item => item.Entry.At <= at);
-            if (selected.Segment is null)
-            {
-                selected = candidates.FirstOrDefault();
-            }
-
-            var segment = selected.Segment ?? segments[0];
+            var candidates = available.SelectMany(segment => segment.Entries.Select(entry => (Segment: segment, Entry: entry))).ToArray();
+            var targetIndex = Array.FindLastIndex(candidates, item => item.Entry.At <= at);
+            targetIndex = Math.Max(0, targetIndex);
+            var inputIndex = !pin && videoPid is not null ? Math.Max(0, targetIndex - 1) : targetIndex;
+            var selected = candidates.Length > 0 ? candidates[inputIndex] : default;
+            var segment = selected.Segment ?? available[0];
             var offset = selected.Segment is null ? 0 : selected.Entry.Offset;
             var actual = selected.Segment is null ? segment.Start : selected.Entry.At;
-            return new TimeshiftReadStream(this, segment.Id, offset, actual, programmeTables.Values.SelectMany(item => item).ToArray(), cancellationToken);
+            var targetAt = candidates.Length > 0 ? candidates[targetIndex].Entry.At : actual;
+            Guid? pinId = pin ? Guid.NewGuid() : null;
+            if (pinId is { } identifier)
+            {
+                pins.Add(identifier, segment.Id);
+            }
+
+            return new TimeshiftReadStream(this, segment.Id, offset, actual, programmeTables.OrderBy(item => item.Key).SelectMany(item => item.Value).ToArray(), pinId, targetAt, cancellationToken);
         }
     }
 
@@ -140,7 +199,7 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
         }
     }
 
-    internal async ValueTask<(int Count, long SegmentId, long Offset)> ReadAsync(long segmentId, long offset, Memory<byte> output, CancellationToken cancellationToken)
+    internal async ValueTask<(int Count, long SegmentId, long Offset)> ReadAsync(long segmentId, long offset, Memory<byte> output, Guid? pinId, CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -158,6 +217,14 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 var count = await RandomAccess.ReadAsync(handle, output, offset, cancellationToken).ConfigureAwait(false);
                 if (count > 0)
                 {
+                    if (pinId is { } identifier)
+                    {
+                        lock (stateLock)
+                        {
+                            pins[identifier] = segmentId;
+                        }
+                    }
+
                     return (count, segmentId, offset + count);
                 }
             }
@@ -186,7 +253,13 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
                 continue;
             }
 
-            var entryPoint = ts.StartsPayload && (videoPid is null ? ts.Pcr is not null : ts.Pid == videoPid && ts.RandomAccess);
+            if (ts.Pid == pcrPid && ts.Pcr is { } pcr)
+            {
+                programmePosition = programmeClock.Update(pcr, now, ts.Discontinuity);
+            }
+
+            var entryTime = programmePosition ?? now;
+            var entryPoint = ts.StartsPayload && (videoPid is null ? ts.Pid == audioPid : ts.Pid == videoPid && ts.RandomAccess);
             if (entryPoint && now - segments[^1].Start >= TimeSpan.FromSeconds(2))
             {
                 await WriteChunkAsync(transport[chunkStart..offset], now, cancellationToken).ConfigureAwait(false);
@@ -200,12 +273,12 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
             {
                 if (entryPoint)
                 {
-                    segments[^1].Entries.Add(new SeekEntry(now, segments[^1].Length + offset - chunkStart));
+                    segments[^1].Entries.Add(new SeekEntry(entryTime, segments[^1].Length + offset - chunkStart));
                 }
 
                 if (ts.Pid == 0 || ts.Pid == pmtPid)
                 {
-                    programmeTables[ts.Pid] = packet.ToArray();
+                    tableAssembler.Push(packet.Span);
                 }
             }
         }
@@ -243,9 +316,14 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
     {
         lock (stateLock)
         {
-            while (segments.Count > 1 && (now - segments[0].Start > retention || totalBytes > byteLimit))
+            while (segments.Count > 1 && ((recordingOnly && pins.Count > 0) || now - segments[0].Start > retention || totalBytes > byteLimit))
             {
                 var expired = segments[0];
+                if (pins.Values.Any(id => id <= expired.Id))
+                {
+                    break;
+                }
+
                 File.Delete(expired.Path);
                 totalBytes -= expired.Length;
                 segments.RemoveAt(0);
@@ -279,6 +357,21 @@ public sealed class IndexedTimeshiftBuffer : IAsyncDisposable
             }
 
             return (segments[index], offset, index == segments.Count - 1);
+        }
+    }
+
+    private BufferSegment[] VisibleSegments()
+    {
+        var cutoff = segments[^1].End - retention;
+        var visible = segments.Where(segment => segment.End >= cutoff).ToArray();
+        return visible.Length > 0 ? visible : [segments[^1]];
+    }
+
+    private void OnTableSectionReceived(object? sender, PsiSectionEventArgs section)
+    {
+        if (section.Data.Span[0] is 0 or 2)
+        {
+            programmeTables[section.Pid] = PsiPacketizer.Packetize(section.Pid, section.Data.Span);
         }
     }
 

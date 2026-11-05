@@ -11,7 +11,7 @@ using FritzTV.Infrastructure.Persistence;
 
 namespace FritzTV.Desktop.ViewModels;
 
-public sealed partial class MainWindowViewModel : ObservableObject
+public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private readonly SatIpDeviceClient _devices;
     private readonly SsdpDiscovery _discovery;
@@ -37,17 +37,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private PlaybackTrack? _selectedAudioTrack;
     private PlaybackTrack? _selectedSubtitleTrack;
 
-    public MainWindowViewModel(SatIpDeviceClient devices, SsdpDiscovery discovery, IPlaybackController playback, UiText text, AppRepository? repository = null)
+    public MainWindowViewModel(SatIpDeviceClient devices, SsdpDiscovery discovery, IPlaybackController playback, UiText text, AppRepository? repository = null, TimeProvider? timeProvider = null)
     {
         _devices = devices;
         _discovery = discovery;
         _playback = playback;
         Text = text;
         _repository = repository;
+        _clock = timeProvider ?? TimeProvider.System;
         _german = text.IsGerman;
         _statusText = Text["Ready"];
-        _playback.TracksChanged += (_, _) => Dispatcher.UIThread.Post(RefreshTracks);
-        _playback.PlaybackFailed += (_, _) => Dispatcher.UIThread.Post(() => StatusText = Text["PlaybackFailed"]);
+        _playback.TracksChanged += OnPlaybackTracksChanged;
+        _playback.PlaybackFailed += OnPlaybackFailed;
     }
 
     public UiText Text { get; }
@@ -137,6 +138,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 Text.SetLanguage(value);
                 OnPropertyChanged(nameof(ChannelFilters));
+                OnPropertyChanged(nameof(PauseButtonText));
                 StatusText = Text["Ready"];
             }
         }
@@ -327,7 +329,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (_repository is not null)
             {
                 await _repository.SaveDeviceAsync(device, cancellationToken).ConfigureAwait(true);
-                await _repository.SaveChannelsAsync(updated, cancellationToken).ConfigureAwait(true);
+                await _repository.ReplaceDeviceChannelsAsync(device.Id, updated, cancellationToken).ConfigureAwait(true);
+                _allChannels.Clear();
+                _allChannels.AddRange(await _repository.GetChannelsAsync(cancellationToken).ConfigureAwait(true));
             }
             FilterChannels();
             StatusText = string.Format(CultureInfo.CurrentCulture, Text["Imported"], device.Name, imported.Count, device.TunerCount);
@@ -363,7 +367,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private async Task PlayAsync(CancellationToken cancellationToken)
     {
-        if (SelectedChannel is null)
+        TvChannel? requested = SelectedChannel;
+        if (requested is null)
         {
             StatusText = Text["SelectChannel"];
             return;
@@ -371,9 +376,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
-            await _playback.PlayAsync(SelectedChannel, cancellationToken).ConfigureAwait(true);
+            await _playback.PlayAsync(requested, cancellationToken).ConfigureAwait(true);
             _playback.SetVolume(Volume);
-            StatusText = string.Format(CultureInfo.CurrentCulture, Text["Playing"], SelectedChannel.Name);
+            TvChannel canonical = _playback.CurrentChannel ?? requested;
+            if (!string.Equals(canonical.Id, requested.Id, StringComparison.Ordinal))
+            {
+                string? selection = SelectedChannel?.Id;
+                int index = _allChannels.FindIndex(channel => string.Equals(channel.Id, requested.Id, StringComparison.Ordinal));
+                if (index >= 0)
+                {
+                    _allChannels[index] = canonical;
+                }
+
+                FilterChannels();
+                SelectedChannel = string.Equals(selection, requested.Id, StringComparison.Ordinal) ? canonical
+                    : _allChannels.FirstOrDefault(channel => string.Equals(channel.Id, selection, StringComparison.Ordinal));
+            }
+
+            StatusText = string.Format(CultureInfo.CurrentCulture, Text["Playing"], canonical.Name);
+            await RefreshPlaybackAsync(cancellationToken).ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -384,12 +405,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        PlayCommand.Cancel();
+        SeekCommand.Cancel();
         await _playback.StopAsync(cancellationToken).ConfigureAwait(true);
         StatusText = Text["Ready"];
     }
 
     [RelayCommand]
-    private void Pause() => _playback.TogglePause();
+    private async Task PauseAsync(CancellationToken cancellationToken) => await _playback.TogglePauseAsync(cancellationToken).ConfigureAwait(true);
 
     [RelayCommand]
     private void ShowTeletext()

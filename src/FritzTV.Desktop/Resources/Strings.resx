@@ -49,4 +49,15 @@
   <data name="GreenTeletextKey" xml:space="preserve"><value>Green teletext key</value></data>
   <data name="YellowTeletextKey" xml:space="preserve"><value>Yellow teletext key</value></data>
   <data name="BlueTeletextKey" xml:space="preserve"><value>Blue teletext key</value></data>
+  <data name="Resume" xml:space="preserve"><value>Resume</value></data>
+  <data name="Live" xml:space="preserve"><value>Live</value></data>
+  <data name="BehindLive" xml:space="preserve"><value>{0} behind live</value></data>
+  <data name="GoLive" xml:space="preserve"><value>Go live</value></data>
+  <data name="BufferExpired" xml:space="preserve"><value>The paused point expired. Resume will start at the oldest retained point.</value></data>
+  <data name="ReceptionFailed" xml:space="preserve"><value>Reception failed.</value></data>
+  <data name="Guide" xml:space="preserve"><value>Programme guide</value></data>
+  <data name="GuideAndSettings" xml:space="preserve"><value>Programme guide and settings</value></data>
+  <data name="SearchGuide" xml:space="preserve"><value>Search programmes</value></data>
+  <data name="RefreshGuide" xml:space="preserve"><value>Reload guide</value></data>
+  <data name="GuideHint" xml:space="preserve"><value>Guide coverage depends on the broadcaster. Select and play a channel to collect its programme information.</value></data>
 </root>

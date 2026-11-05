@@ -86,9 +86,18 @@ Hosted CI uses synthetic fixtures with original media. Live suites opt in to the
 
 ## Current execution evidence
 
-- Root AGENTS.md created as the first implementation action; initial main commit429f54c pushed to GitHub.
-- Linux .NET SDK10.0.403 installed after matching official SHA-512 metadata.
-- Native PS5 AST check passed for bootstrap; -VerifyOnly runtime check produces an accurate partial report.
-- Windows tool installation is in progress; this is not a completed bootstrap gate.
-- A snapshot command reported success (fritz-tv-before-bootstrap-20261105), but host VirtualBox management currently reports a stopped VM while its existing console/SSH is active. Reconcile the management connection before treating snapshot/network configuration as verified.
-- Guest scoped RTP firewall rule exists; UDP NAT forwarding and live Windows reception remain pending verification.
+Verified on 2026-11-05; timestamps in machine reports are UTC.
+
+- Root AGENTS.md was created first; initial main commit429f54c and implementationcheckpoint62da75d are on GitHub. Draft PR: https://github.com/jan-guenter/fritz-tv-app/pull/1.
+- Linux SDK10.0.403 was installed after matching official SHA-512 metadata. Windows has all pinned tools installed; actual verification reports AllRequiredToolsInstalled=True.
+- Bootstrap passed native PS5 AST parsing and actual explicit/default-path execution. Already-installed package handling, per-user Inno discovery, private credentials, and persistent interactive tasks were exercised and corrected.
+- Authenticated Windows-MCP discovery, screenshots, accessibility, application launch, mouse input, keyboard input, save, and independent file readback passed. The host loopback18000 endpoint is registered in private Codex configuration. Both MCP and runner login tasks restarted successfully.
+- The repository runner fritz-tv-win11 is registered and interactive. Its private pre-job admission guard is installed outside the checkout; SHA25655ca3f9674c22c01c380ad32bf8ca262f5d4f418577e61241283d57adaffde62. All13 native positive/negative policy cases passed.
+- The initial sandboxed VirtualBox call created a disconnected management context; its reported snapshot was not counted as a backup. The guest was shut down normally, the actual runtime disk was reflink-backed-up and its header verified, original GUI/service exited, and saved metadata returned to the correct base disk. A host helper guard now refuses stale IPC contexts.
+- A genuine cold recovery snapshot fritz-tv-toolchain-ready-20261105 (UUID80a59afa-472b-4b1e-9433-c453588d349c) was created in the consistent context. The VM restarted, management reports running, and all32 reserved UDP forwards are present.
+- Exact Windows checkpoint62da75d built with0warnings/errors; all20 initial core/infrastructure/headless tests passed. Native FRITZ TV window and LibVLC view initialization succeeded. Later buffered/recording UI acceptance remains pending.
+- Windows live TV received8585RTP packets/11,297,860TSbytes with0detectedloss in10seconds; radio received957RTP packets/1,258,472TSbytes with0loss in6seconds. Both decode commands exited0. Raw mid-stream TV captures show initial PPS/open-GOP reference warnings; this is not a warning-free startup claim.
+- Windows RTCP announcements were not observed through NAT. Linux actualRTCP SES1 parsing passed (frontend/level/lock/quality/frequency); native Windows RTCP remains a diagnostics follow-up.
+- Backend default suites include62tests (59passed,3native opt-in skipped at the shared checkpoint); the three native synthetic TV/radio finalization and Linux sleep-inhibition checks passed separately. Further tests are being added.
+- Actual private ZDF30.76second capture finalized with H264,3AC3,DVBSUB andSubRip; extractedSubRip contained8timedcues. No broadcaster payload/caption text is committed.
+- Initial GitHub CI detected platform/RID lockfile mismatches; fixes are in the next checkpoint. Do not count CI or full application acceptance complete until the final committed revision passes.

@@ -30,7 +30,7 @@ public static class EitParser
             if (TryGetTime(data, out var start, out var duration))
             {
                 var text = ReadDescriptors(data[12..], preferredLanguage);
-                result.Add(new Programme(identity, Read16(data, 0), start, duration, text.Title, text.Description, text.Language));
+                result.Add(new Programme(identity, Read16(data, 0), start, duration, text.Title, text.Description, text.Language, section[0], (byte)((section[5] >> 1) & 31), section[0] is 0x4e or >= 0x50 and <= 0x5f));
             }
         }
 
