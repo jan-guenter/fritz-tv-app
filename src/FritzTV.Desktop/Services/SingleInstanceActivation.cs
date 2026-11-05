@@ -7,7 +7,7 @@ namespace FritzTV.Desktop.Services;
 public sealed class SingleInstanceActivation : IAsyncDisposable
 {
     private readonly InstanceOwnership ownership;
-    private readonly NamedPipeServerStream server;
+    private NamedPipeServerStream server;
     private readonly CancellationTokenSource lifetime = new();
     private Task? listener;
     private int disposed;
@@ -15,10 +15,13 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
     private SingleInstanceActivation(InstanceOwnership ownership, string pipeName)
     {
         this.ownership = ownership;
-        server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        PipeName = pipeName;
+        server = CreateServer(pipeName);
     }
 
     public event EventHandler? ActivationRequested;
+
+    public string PipeName { get; }
 
     public static async Task<SingleInstanceActivation?> CreateOrActivateAsync(string applicationId, CancellationToken cancellationToken = default)
     {
@@ -73,21 +76,25 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
         }
     }
 
+    private static NamedPipeServerStream CreateServer(string name) => new(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+
     private static async Task ActivateAsync(string name, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         try
         {
-            await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
-            await client.WriteAsync(new byte[] { 1 }, timeout.Token).ConfigureAwait(false);
-            await client.FlushAsync(timeout.Token).ConfigureAwait(false);
-            var acknowledgment = new byte[1];
-            await client.ReadExactlyAsync(acknowledgment, timeout.Token).ConfigureAwait(false);
-            if (acknowledgment[0] != 1)
+            while (true)
             {
-                throw new IOException("The existing application rejected the activation request.");
+                try
+                {
+                    await SendActivationAsync(name, timeout.Token).ConfigureAwait(false);
+                    return;
+                }
+                catch (IOException)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
@@ -96,23 +103,40 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
         }
     }
 
+    private static async Task SendActivationAsync(string name, CancellationToken cancellationToken)
+    {
+        using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await client.WriteAsync(new byte[] { 1 }, cancellationToken).ConfigureAwait(false);
+        await client.FlushAsync(cancellationToken).ConfigureAwait(false);
+        var acknowledgment = new byte[1];
+        await client.ReadExactlyAsync(acknowledgment, cancellationToken).ConfigureAwait(false);
+        if (acknowledgment[0] != 1)
+        {
+            // A protocol rejection is terminal; only transport disconnects are retried.
+            throw new InvalidDataException("The existing application rejected the activation request.");
+        }
+    }
+
     private async Task ListenAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            NamedPipeServerStream connection = server;
             try
             {
-                await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await connection.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 request.CancelAfter(TimeSpan.FromSeconds(5));
                 var command = new byte[1];
-                await server.ReadExactlyAsync(command, request.Token).ConfigureAwait(false);
+                await connection.ReadExactlyAsync(command, request.Token).ConfigureAwait(false);
                 if (command[0] == 1)
                 {
                     ActivationRequested?.Invoke(this, EventArgs.Empty);
-                    await server.WriteAsync(new byte[] { 1 }, request.Token).ConfigureAwait(false);
-                    await server.FlushAsync(request.Token).ConfigureAwait(false);
                 }
+
+                await connection.WriteAsync(new byte[] { command[0] == 1 ? (byte)1 : (byte)0 }, request.Token).ConfigureAwait(false);
+                await connection.FlushAsync(request.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -124,9 +148,17 @@ public sealed class SingleInstanceActivation : IAsyncDisposable
             }
             finally
             {
-                if (server.IsConnected)
+                try
                 {
-                    server.Disconnect();
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        // Keep the shared listener alive while replacing a disconnected instance.
+                        server = CreateServer(PipeName);
+                    }
+                }
+                finally
+                {
+                    connection.Dispose();
                 }
             }
         }

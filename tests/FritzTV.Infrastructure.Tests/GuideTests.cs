@@ -118,6 +118,36 @@ public sealed class GuideTests
         }
     }
 
+    [Fact]
+    public async Task MalformedRtspSetupIsAnActionableSkippedFrequencyRatherThanAHostFailure()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "fritztv-guide-malformed-rtsp-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var server = new LoopbackRtspServer(missingSetupSession: true);
+        try
+        {
+            var repository = new AppRepository(Path.Combine(directory, "app.db"));
+            await repository.InitializeAsync(cancellationToken);
+            var device = new SatIpDevice(Guid.NewGuid(), "uuid:synthetic", "Synthetic", new Uri($"http://127.0.0.1:{server.Port}/device.xml"), null, null, 1);
+            await repository.SaveDeviceAsync(device, cancellationToken);
+            await repository.SaveChannelsAsync([new TvChannel("channel", device.Id, "Synthetic", ChannelKind.Radio, new Uri($"rtsp://127.0.0.1:{server.Port}/?freq=444&pids=0,100"))], cancellationToken);
+            await using var sessions = new SatIpSessionManager(32400, 32527);
+            using var service = new GuideService(repository, sessions, NullLogger<GuideService>.Instance);
+            await service.RefreshAsync(cancellationToken);
+            Assert.False(service.Status.IsScanning);
+            Assert.NotNull(service.Status.LastError);
+            Assert.Empty(sessions.GetUsageSnapshot());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     private static byte[] Section(byte number, byte table, int version = 0)
     {
         var section = DvbFixtures.Eit();

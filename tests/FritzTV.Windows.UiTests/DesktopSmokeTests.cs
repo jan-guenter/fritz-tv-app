@@ -13,7 +13,7 @@ public sealed class DesktopSmokeTests
 {
     public static bool IsUiAutomationEnabled => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FRITZTV_UI_APP"));
 
-    [Fact(SkipUnless = nameof(IsUiAutomationEnabled))]
+    [Fact(Skip = "Set FRITZTV_UI_APP in an unlocked Windows desktop session.", SkipUnless = nameof(IsUiAutomationEnabled))]
     public async Task DesktopFitsWorkAreaValidatesInputsAndSwitchesLanguage()
     {
         var session = new NativeDesktopSession();
@@ -46,7 +46,7 @@ public sealed class DesktopSmokeTests
         Assert.True(workArea.Contains(session.Find("Quit").BoundingRectangle));
     }
 
-    [Fact(SkipUnless = nameof(IsUiAutomationEnabled))]
+    [Fact(Skip = "Set FRITZTV_UI_APP in an unlocked Windows desktop session.", SkipUnless = nameof(IsUiAutomationEnabled))]
     public async Task ClosingToTrayAndSecondLaunchActivateTheSameProcess()
     {
         var session = new NativeDesktopSession();

@@ -96,6 +96,19 @@ public sealed class SessionManagerTests
         Assert.Equal(1, Assert.Single(manager.GetUsageSnapshot()).Consumers);
     }
 
+    [Fact]
+    public async Task MalformedKeepaliveFailsConsumersAndStillAllowsDeterministicDisposal()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var server = new LoopbackRtspServer(sessionTimeoutSeconds: 2, malformedKeepalive: true);
+        await using var manager = new SatIpSessionManager(32200, 32327);
+        var device = Device(server.Port, 1);
+        await using var lease = await manager.AcquireAsync(device, Channel(device, server.Port, 444, 100), TunerPriority.Viewing, cancellationToken);
+        await Assert.ThrowsAsync<InvalidDataException>(() => ReadFirstBatchAsync(lease, cancellationToken));
+        Assert.IsType<InvalidDataException>(lease.Session.Failure);
+        Assert.False(lease.Session.IsRunning);
+    }
+
     private static async Task<ReadOnlyMemory<byte>> ReadFirstBatchAsync(ChannelLease lease, CancellationToken cancellationToken)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

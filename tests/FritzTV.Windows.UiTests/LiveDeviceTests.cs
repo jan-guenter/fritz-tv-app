@@ -12,7 +12,7 @@ public sealed class LiveDeviceTests
         && Uri.TryCreate(Environment.GetEnvironmentVariable("FRITZTV_LIVE_DEVICE"), UriKind.Absolute, out Uri? uri)
         && uri.Scheme is "http" or "https";
 
-    [Fact(SkipUnless = nameof(IsLiveDeviceEnabled))]
+    [Fact(Skip = "Set FRITZTV_UI_APP and FRITZTV_LIVE_DEVICE in an unlocked Windows desktop session.", SkipUnless = nameof(IsLiveDeviceEnabled))]
     public async Task LiveChannelDecodesAndRecordingContinuesAfterViewingStops()
     {
         var session = new NativeDesktopSession();

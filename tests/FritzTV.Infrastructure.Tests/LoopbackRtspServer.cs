@@ -17,10 +17,12 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
 
     private readonly ConcurrentBag<TcpClient> connections = [];
 
-    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60)
+    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60, bool malformedKeepalive = false, bool missingSetupSession = false)
     {
         DeferFirstSetup = deferFirstSetup;
         SessionTimeoutSeconds = sessionTimeoutSeconds;
+        MalformedKeepalive = malformedKeepalive;
+        MissingSetupSession = missingSetupSession;
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         acceptTask = AcceptAsync(lifetime.Token);
@@ -31,6 +33,10 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
     public bool DeferFirstSetup { get; }
 
     public int SessionTimeoutSeconds { get; }
+
+    public bool MalformedKeepalive { get; }
+
+    public bool MissingSetupSession { get; }
 
     public TaskCompletionSource FirstSetup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -130,6 +136,14 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                 }
 
                 var response = FormattableString.Invariant($"RTSP/1.0 200 OK\r\nCSeq: 0\r\nSession: test-session;timeout={SessionTimeoutSeconds}\r\ncom.ses.streamID: 1\r\nContent-Length: 0\r\n\r\n");
+                if (MalformedKeepalive && line.StartsWith("OPTIONS ", StringComparison.Ordinal))
+                {
+                    response = "Synthetic malformed RTSP status\r\n";
+                }
+                else if (MissingSetupSession && line.StartsWith("SETUP ", StringComparison.Ordinal))
+                {
+                    response = "RTSP/1.0 200 OK\r\nCSeq: 0\r\nContent-Length: 0\r\n\r\n";
+                }
                 await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(response), cancellationToken).ConfigureAwait(false);
             }
         }

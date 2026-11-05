@@ -1,3 +1,4 @@
+using System.IO.Pipes;
 using FritzTV.Desktop.Services;
 using Xunit;
 
@@ -30,6 +31,30 @@ public sealed class SingleInstanceActivationTests
         await first.DisposeAsync();
         await using var replacement = await SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken);
         Assert.NotNull(replacement);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnAlreadyConnectedSecondaryCanAbandonBeforeListeningWithoutPoisoningLaterRequests(bool sendRequest)
+    {
+        string name = "FritzTV.Test." + Guid.NewGuid().ToString("N");
+        await using var primary = await SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken);
+        Assert.NotNull(primary);
+        using (var abandoned = new NamedPipeClientStream(".", primary.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly))
+        {
+            await abandoned.ConnectAsync(TestContext.Current.CancellationToken);
+            if (sendRequest)
+            {
+                await abandoned.WriteAsync(new byte[] { 1 }, TestContext.Current.CancellationToken);
+                await abandoned.FlushAsync(TestContext.Current.CancellationToken);
+            }
+        }
+
+        primary.StartListening();
+        Task<SingleInstanceActivation?>[] requests = Enumerable.Range(0, 8).Select(_ => SingleInstanceActivation.CreateOrActivateAsync(name, TestContext.Current.CancellationToken)).ToArray();
+        var responses = await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.All(responses, Assert.Null);
     }
 
     [Fact]
