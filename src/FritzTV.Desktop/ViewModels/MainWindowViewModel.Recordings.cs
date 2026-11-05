@@ -313,7 +313,7 @@ public sealed partial class MainWindowViewModel
 
     partial void OnDetailsExpandedChanged(bool value)
     {
-        OnPropertyChanged(nameof(VideoRowHeight));
+        OnPropertyChanged(nameof(DetailsRowHeight));
         OnPropertyChanged(nameof(ShowAuxiliaryControls));
     }
 

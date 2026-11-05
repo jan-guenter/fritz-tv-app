@@ -57,5 +57,7 @@ internal sealed class FakePlaybackController : IPlaybackController
 
     public void NavigateTeletext(string key) { }
 
-    public void ToggleTeletextTransparency() { }
+    public void CloseTeletext() => TeletextPage = 0;
+
+    public Task ToggleTeletextTransparencyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

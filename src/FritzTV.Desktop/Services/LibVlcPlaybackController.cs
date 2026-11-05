@@ -29,6 +29,9 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     private long _lengthMilliseconds;
     private long _warmupMilliseconds;
     private int _requestedVolume = 75;
+    private int _teletextPage;
+    private bool _teletextOpaque = true;
+    private bool _restoreTeletext;
     private volatile bool _outputReady;
     private bool _paused;
     private bool _filePlayback;
@@ -79,7 +82,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             _bufferedPlayback = await BufferedPlayback.StartAsync(sessions, device, channel, settings, repository, cancellationToken).ConfigureAwait(true);
             _currentChannel = _bufferedPlayback.Channel;
             _filePlayback = false;
-            OpenBufferedMedia(null);
+            await OpenBufferedMediaAsync(null).ConfigureAwait(true);
         }
         catch
         {
@@ -104,7 +107,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             _warmupMilliseconds = 0;
             _origin = DateTimeOffset.UnixEpoch;
             _media = new Media(_libVlc!, new Uri(Path.GetFullPath(path)));
-            StartNativeMedia();
+            await StartNativeMediaAsync().ConfigureAwait(true);
         }
         finally
         {
@@ -148,7 +151,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             }
             else
             {
-                OpenBufferedMedia(position);
+                await OpenBufferedMediaAsync(position).ConfigureAwait(true);
             }
         }
     }
@@ -229,6 +232,11 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         if (_mediaPlayer is not null)
         {
             _mediaPlayer.Volume = _outputReady ? _requestedVolume : 0;
+            if (_outputReady && _restoreTeletext && _teletextPage != 0)
+            {
+                _restoreTeletext = false;
+                _mediaPlayer.Teletext = _teletextPage;
+            }
         }
     }
 
@@ -252,6 +260,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(page, 100);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(page, 899);
+        _teletextPage = page;
         if (_mediaPlayer is not null)
         {
             _mediaPlayer.Teletext = page;
@@ -263,10 +272,44 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         if (_mediaPlayer is not null && Enum.TryParse(key, ignoreCase: false, out TeletextKey navigation))
         {
             _mediaPlayer.Teletext = (int)navigation;
+            if (navigation == TeletextKey.Index)
+            {
+                _teletextPage = 100;
+            }
         }
     }
 
-    public void ToggleTeletextTransparency() => _mediaPlayer?.ToggleTeletext();
+    public void CloseTeletext()
+    {
+        _teletextPage = 0;
+        _restoreTeletext = false;
+        if (_mediaPlayer is not null)
+        {
+            _mediaPlayer.Teletext = 0;
+        }
+    }
+
+    public async Task ToggleTeletextTransparencyAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        try
+        {
+            if (_bufferedPlayback is null || GetSnapshot() is not { } snapshot)
+            {
+                return;
+            }
+
+            // VLC 3's public ToggleTeletext switches the subtitle ES on/off. Its
+            // supported vbi-opaque decoder option requires recreating the decoder.
+            _teletextOpaque = !_teletextOpaque;
+            _restoreTeletext = _teletextPage != 0;
+            await SeekCoreAsync(snapshot.Position).ConfigureAwait(true);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -329,7 +372,7 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         NativePlayerCreated?.Invoke(this, EventArgs.Empty);
     }
 
-    private void OpenBufferedMedia(DateTimeOffset? position)
+    private async Task OpenBufferedMediaAsync(DateTimeOffset? position)
     {
         _readerLifetime = new CancellationTokenSource();
         _reader = _bufferedPlayback!.Buffer.OpenReader(position, _readerLifetime.Token);
@@ -342,17 +385,19 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
         _media.AddOption(":demux=ts");
         _media.AddOption(":program=" + _bufferedPlayback.Programme!.ServiceId.ToString(CultureInfo.InvariantCulture));
         _media.AddOption(":network-caching=1000");
-        StartNativeMedia();
+        _media.AddOption(_teletextOpaque ? ":vbi-opaque" : ":no-vbi-opaque");
+        _restoreTeletext = _teletextPage != 0;
+        await StartNativeMediaAsync().ConfigureAwait(true);
     }
 
-    private void StartNativeMedia()
+    private async Task StartNativeMediaAsync()
     {
         Interlocked.Exchange(ref _elapsedMilliseconds, 0);
         Interlocked.Exchange(ref _lengthMilliseconds, 0);
         _outputReady = _warmupMilliseconds == 0;
         ApplyOutputState();
         NativeOutputChanged?.Invoke(this, EventArgs.Empty);
-        if (!_mediaPlayer!.Play(_media!))
+        if (!await Task.Run(() => _mediaPlayer!.Play(_media!)).ConfigureAwait(true))
         {
             throw new InvalidOperationException("LibVLC could not start playback.");
         }
@@ -393,6 +438,8 @@ public sealed class LibVlcPlaybackController(AppRepository repository, SatIpSess
             _bufferedPlayback = null;
         }
 
+        _teletextPage = 0;
+        _restoreTeletext = false;
         _currentChannel = null;
         _filePlayback = false;
         _paused = false;

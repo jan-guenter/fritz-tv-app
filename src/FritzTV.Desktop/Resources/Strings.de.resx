@@ -56,7 +56,7 @@
   <data name="BufferExpired" xml:space="preserve"><value>Die pausierte Position ist abgelaufen. Fortsetzen beginnt an der ältesten gespeicherten Stelle.</value></data>
   <data name="ReceptionFailed" xml:space="preserve"><value>Empfang fehlgeschlagen.</value></data>
   <data name="Guide" xml:space="preserve"><value>Programmübersicht</value></data>
-  <data name="GuideAndSettings" xml:space="preserve"><value>Programmübersicht und Einstellungen</value></data>
+  <data name="GuideAndSettings" xml:space="preserve"><value>Programmübersicht, Aufnahmen und Einstellungen</value></data>
   <data name="SearchGuide" xml:space="preserve"><value>Sendungen suchen</value></data>
   <data name="RefreshGuide" xml:space="preserve"><value>Programm neu laden</value></data>
   <data name="GuideHint" xml:space="preserve"><value>Die Programmdaten hängen vom Sender ab. Einen Sender auswählen und wiedergeben, um dessen Programminformationen zu laden.</value></data>
@@ -130,4 +130,5 @@
   <data name="BufferedRecordingUnavailable" xml:space="preserve"><value>Aufnahmen aus dem Puffer sind nur beim laufenden Sender möglich.</value></data>
   <data name="TimerClockPolicy" xml:space="preserve"><value>Zeiten in einer Zeitlücke werden um die Lücke vorgerückt; doppelte Uhrzeiten verwenden das erste Vorkommen. Wiederholungen behalten ihre ursprüngliche Ortszeit.</value></data>
   <data name="ExitFullscreen" xml:space="preserve"><value>Vollbild verlassen</value></data>
+  <data name="Close" xml:space="preserve"><value>Schließen</value></data>
 </root>

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Threading;
 using FritzTV.Desktop.Services;
 using FritzTV.Desktop.ViewModels;
@@ -13,11 +14,14 @@ public sealed partial class MainWindow : Window
 {
     private readonly LibVlcPlaybackController? _player;
     private VideoView? _videoView;
+    private Window? _warmupCover;
 
     public MainWindow()
     {
         InitializeComponent();
         Opened += (_, _) => FitWorkArea();
+        LayoutUpdated += (_, _) => PositionWarmupCover();
+        PositionChanged += (_, _) => PositionWarmupCover();
         PropertyChanged += (_, args) =>
         {
             if (args.Property == WindowStateProperty && DataContext is MainWindowViewModel viewModel)
@@ -48,6 +52,7 @@ public sealed partial class MainWindow : Window
         {
             _player.NativePlayerCreated -= OnNativePlayerCreated;
             _player.NativeOutputChanged -= OnNativeOutputChanged;
+            _warmupCover?.Close();
         };
     }
 
@@ -55,6 +60,7 @@ public sealed partial class MainWindow : Window
 
     public void DetachPlayer()
     {
+        _warmupCover?.Hide();
         if (_videoView is not null)
         {
             _videoView.MediaPlayer = null;
@@ -97,21 +103,63 @@ public sealed partial class MainWindow : Window
     {
         _videoView ??= new VideoView();
         _videoView.MediaPlayer = _player?.NativePlayer;
-        _videoView.IsVisible = true;
         VideoHost.Content = _videoView;
         UpdateLayout();
     }
 
     private void OnNativeOutputChanged(object? sender, EventArgs args)
     {
-        Dispatcher.UIThread.Post(() =>
+        if (Dispatcher.UIThread.CheckAccess())
         {
-            if (_videoView is not null)
+            UpdateNativeOutput();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(UpdateNativeOutput);
+        }
+    }
+
+    private void UpdateNativeOutput()
+    {
+        if (_videoView is null)
+        {
+            return;
+        }
+
+        // Never hide NativeControlHost while VLC owns its HWND/X11 window. A separate
+        // opaque cover also works on X11 without a transparent-window compositor.
+        if (_player?.IsOutputReady == true)
+        {
+            _warmupCover?.Hide();
+        }
+        else
+        {
+            _warmupCover ??= new Window
             {
-                _videoView.IsVisible = _player?.IsOutputReady ?? false;
-                _player?.ApplyOutputState();
+                WindowDecorations = WindowDecorations.None,
+                Background = Brushes.Black,
+                CanResize = false,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+            };
+            PositionWarmupCover();
+            if (!_warmupCover.IsVisible)
+            {
+                _warmupCover.Show(this);
             }
-        });
+        }
+
+        _player?.ApplyOutputState();
+    }
+
+    private void PositionWarmupCover()
+    {
+        if (_warmupCover is not null && _videoView is not null)
+        {
+            _warmupCover.Width = Math.Max(1, _videoView.Bounds.Width);
+            _warmupCover.Height = Math.Max(1, _videoView.Bounds.Height);
+            _warmupCover.Position = _videoView.PointToScreen(default);
+        }
     }
 
     private void OnTimelinePressed(object? sender, PointerPressedEventArgs args)

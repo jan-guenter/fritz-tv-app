@@ -20,7 +20,7 @@ public sealed partial class MainWindowViewModel
 
     public CornerRadius VideoCorners => new(IsFullscreen ? 0 : 12);
 
-    public GridLength VideoRowHeight => DetailsExpanded && !IsFullscreen ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+    public GridLength DetailsRowHeight => DetailsExpanded && !IsFullscreen ? new GridLength(3, GridUnitType.Star) : GridLength.Auto;
 
     public bool ShowAuxiliaryControls => !DetailsExpanded && !IsFullscreen;
 
@@ -43,7 +43,7 @@ public sealed partial class MainWindowViewModel
         OnPropertyChanged(nameof(PlayerRowSpacing));
         OnPropertyChanged(nameof(ChannelColumnWidth));
         OnPropertyChanged(nameof(VideoCorners));
-        OnPropertyChanged(nameof(VideoRowHeight));
+        OnPropertyChanged(nameof(DetailsRowHeight));
         OnPropertyChanged(nameof(ShowAuxiliaryControls));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(FullscreenButtonText));

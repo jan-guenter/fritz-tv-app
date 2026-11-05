@@ -595,7 +595,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private void NavigateTeletext(string key) => _playback.NavigateTeletext(key);
 
     [RelayCommand]
-    private void ToggleTeletextTransparency() => _playback.ToggleTeletextTransparency();
+    private void CloseTeletext() => _playback.CloseTeletext();
+
+    [RelayCommand]
+    private async Task ToggleTeletextTransparencyAsync(CancellationToken cancellationToken) =>
+        await RunPlaybackActionAsync(() => _playback.ToggleTeletextTransparencyAsync(cancellationToken), cancellationToken).ConfigureAwait(true);
 
     [RelayCommand]
     private void ClearDeviceFilter() => SelectedDevice = null;

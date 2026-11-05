@@ -47,6 +47,8 @@ public sealed class MainWindowTests(HeadlessFixture fixture)
             viewModel.TeletextPage = "150";
             viewModel.ShowTeletextCommand.Execute(null);
             Assert.Equal(150, playback.TeletextPage);
+            viewModel.CloseTeletextCommand.Execute(null);
+            Assert.Equal(0, playback.TeletextPage);
         }, TestContext.Current.CancellationToken).ConfigureAwait(true);
     }
 

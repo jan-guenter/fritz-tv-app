@@ -130,4 +130,5 @@
   <data name="BufferedRecordingUnavailable" xml:space="preserve"><value>Retained content can only be recorded from the currently playing channel.</value></data>
   <data name="TimerClockPolicy" xml:space="preserve"><value>Times in a clock gap move forward by the gap; ambiguous times use the first occurrence. Recurring timers retain their original local time.</value></data>
   <data name="ExitFullscreen" xml:space="preserve"><value>Exit fullscreen</value></data>
+  <data name="Close" xml:space="preserve"><value>Close</value></data>
 </root>

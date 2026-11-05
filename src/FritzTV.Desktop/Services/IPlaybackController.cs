@@ -42,5 +42,7 @@ public interface IPlaybackController
 
     void NavigateTeletext(string key);
 
-    void ToggleTeletextTransparency();
+    void CloseTeletext();
+
+    Task ToggleTeletextTransparencyAsync(CancellationToken cancellationToken);
 }
