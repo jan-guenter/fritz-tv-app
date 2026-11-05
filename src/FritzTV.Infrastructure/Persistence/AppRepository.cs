@@ -418,6 +418,22 @@ public sealed class AppRepository(string databasePath)
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<bool> AreSameChannelAsync(TvChannel first, TvChannel second, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        if (first.DeviceId != second.DeviceId)
+        {
+            return false;
+        }
+
+        using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var transaction = connection.BeginTransaction(deferred: true);
+        var firstId = await ResolveIdAsync(connection, transaction, first.Id, cancellationToken).ConfigureAwait(false);
+        var secondId = await ResolveIdAsync(connection, transaction, second.Id, cancellationToken).ConfigureAwait(false);
+        return string.Equals(firstId, secondId, StringComparison.Ordinal);
+    }
+
     public async Task<TvChannel?> GetChannelAsync(string id, CancellationToken cancellationToken = default)
     {
         using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);

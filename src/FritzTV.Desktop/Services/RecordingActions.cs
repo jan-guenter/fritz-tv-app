@@ -7,15 +7,20 @@ namespace FritzTV.Desktop.Services;
 
 public sealed class RecordingActions(LibVlcPlaybackController player, RecordingCoordinator recordings, AppRepository repository)
 {
+    public async Task<bool> CanUseRetainedSourceAsync(TvChannel channel, CancellationToken cancellationToken) =>
+        player.GetSnapshot() is { IsLive: true } && await MatchBufferedSourceAsync(channel, cancellationToken).ConfigureAwait(false) is not null;
+
+    private async Task<BufferedPlayback?> MatchBufferedSourceAsync(TvChannel channel, CancellationToken cancellationToken)
+    {
+        BufferedPlayback? source = player.BufferedSource;
+        return source is not null && await repository.AreSameChannelAsync(source.Channel, channel, cancellationToken).ConfigureAwait(false) ? source : null;
+    }
+
     public async Task<RecordingInstance> StartAsync(TvChannel channel, int startMode, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(channel);
         AppSettings settings = await repository.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
-        BufferedPlayback? playback = player.BufferedSource;
-        if (!string.Equals(playback?.Channel.Id, channel.Id, StringComparison.Ordinal))
-        {
-            playback = null;
-        }
+        BufferedPlayback? playback = await MatchBufferedSourceAsync(channel, cancellationToken).ConfigureAwait(false);
 
         DateTimeOffset? from = null;
         if (startMode != 0)

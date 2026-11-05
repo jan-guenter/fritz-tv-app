@@ -113,15 +113,16 @@ public sealed partial class MainWindowViewModel
             return;
         }
 
-        if (InstantStartMode > 0 && (!string.Equals(channel.Id, _playback.CurrentChannel?.Id, StringComparison.Ordinal) || _playback.GetSnapshot() is not { IsLive: true }))
-        {
-            StatusText = Text["BufferedRecordingUnavailable"];
-            return;
-        }
-
+        int startMode = InstantStartMode;
         await RunRecordingActionAsync(async () =>
         {
-            await _recordingActions.StartAsync(channel, InstantStartMode, cancellationToken).ConfigureAwait(true);
+            if (startMode > 0 && !await _recordingActions.CanUseRetainedSourceAsync(channel, cancellationToken).ConfigureAwait(true))
+            {
+                StatusText = Text["BufferedRecordingUnavailable"];
+                return;
+            }
+
+            await _recordingActions.StartAsync(channel, startMode, cancellationToken).ConfigureAwait(true);
             ShowRecordings();
         }, cancellationToken).ConfigureAwait(true);
     }

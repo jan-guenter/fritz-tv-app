@@ -17,7 +17,7 @@ public sealed class SatIpRecordingInputFactory(AppRepository repository, SatIpSe
         ChannelLease? lease = null;
         try
         {
-            if (playback is not null && string.Equals(playback.Channel.Id, channel.Id, StringComparison.Ordinal))
+            if (playback is not null && await repository.AreSameChannelAsync(playback.Channel, channel, cancellationToken).ConfigureAwait(false))
             {
                 retention = playback.Retain();
             }
