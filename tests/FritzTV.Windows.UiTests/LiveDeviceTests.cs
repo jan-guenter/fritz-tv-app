@@ -21,11 +21,12 @@ public sealed class LiveDeviceTests
         session.Find("ImportDevice").AsButton().Invoke();
         ListBox channels = session.Find("Channels").AsListBox();
         await NativeDesktopSession.WaitAsync(() => channels.Items.Length > 0, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken).ConfigureAwait(true);
-        session.Find("ChannelSearch").AsTextBox().Text = Environment.GetEnvironmentVariable("FRITZTV_LIVE_CHANNEL") ?? "ZDF HD";
-        await NativeDesktopSession.WaitAsync(() => channels.Items.Length > 0, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ConfigureAwait(true);
-        channels.Items[0].Select();
+        string channelName = Environment.GetEnvironmentVariable("FRITZTV_LIVE_CHANNEL") ?? "ZDF HD";
+        session.Find("ChannelSearch").AsTextBox().Text = channelName;
+        await NativeDesktopSession.WaitAsync(() => channels.Items.Any(item => string.Equals(item.Name, channelName, StringComparison.Ordinal)), TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        channels.Items.Single(item => string.Equals(item.Name, channelName, StringComparison.Ordinal)).Select();
         session.Find("Play").AsButton().Invoke();
-        await NativeDesktopSession.WaitAsync(() => session.Find("Timeline").AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        await NativeDesktopSession.WaitAsync(() => session.Window.FindFirstDescendant(condition => condition.ByAutomationId("Timeline")) is { } timeline && timeline.AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
         session.Find("Pause").AsButton().Invoke();
         await NativeDesktopSession.WaitAsync(() => session.Find("Pause").Name is "Resume" or "Fortsetzen", TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).ConfigureAwait(true);
         double paused = session.Find("Timeline").AsSlider().Value;
