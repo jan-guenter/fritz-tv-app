@@ -7,6 +7,7 @@ Results below were measured on 2026-11-05. They identify the tested revision and
 | Revision/check | Measured result |
 |---|---|
 | [`e063016` hosted CI](https://github.com/jan-guenter/fritz-tv-app/actions/runs/41995058270) | Windows/Linux strict builds, analysis, formatting, dependency audit and script/workflow lint passed. Unit/headless suite: 154 total, 150 passed, four native opt-in skips. Both installer jobs passed. The separate Windows UI project passed five fixture tests and skipped three interactive cases on the hosted Windows runner. |
+| `b12c72f` Windows UIA polling | Strict Windows-targeted build passed with zero warnings/errors. Three regressions passed on the actual VM through SSH: transient provider recovery, persistent outage bounded by the original deadline, and immediate propagation of an unrelated COM error. These fixture checks did not automate the desktop. |
 | Clean `ebccec43b543ee681a986fbc05e2c19b54e97040` Linux GUI | Locked restore and Release Desktop build passed without warnings/errors. From 06:24:31–06:26:21 UTC, whole-display X11/Xvfb captures verified embedded live TV; opaque/transparent teletext page 100; explicit Close; pause while capture continued; paused rewind; resume; Go Live; expanded guide with continuing video and visible Quit. Quit exited 0. SDK 10.0.403 and system LibVLC/plugins `3.0.20-3build6` were recorded. |
 | `cd207dc` Windows background TV timer | In console session 1 the app ran with `--background` and recorded without watching. The 07:30:39.933179–07:30:59.933179 UTC interval produced a 20.000-second MKV with H.264, three AC3 tracks, DVB subtitles and teletext-derived SRT. State was Completed with no error/warning. FFmpeg exited 0 with known cold open-GOP startup diagnostics. |
 | `cd207dc` Windows radio recording | Capture grew 721,920 bytes during three seconds after listening stopped. Explicit Stop finalized a 373.312-second German AAC MKA and FFmpeg decoded without errors. Four lost RTP packets and one continuity gap correctly marked it Partial; the 83,344,724-byte source TS was retained and recovery eligibility cleared. |
@@ -24,6 +25,8 @@ Protected `main` requires a PR with these exact current checks, resolved convers
 - `Workflow and packaging lint`
 - `Installer packages / package (ubuntu-24.04)`
 - `Installer packages / package (windows-2025)`
+
+The [automatic CodeRabbit PR status](https://github.com/jan-guenter/fritz-tv-app/pull/1#issuecomment-6647891537) skipped review at `b12c72f`: 232 selected files exceeded the 150-file limit, and review credits/capacity were insufficient. Three completed CLI reviews produced 38 reports; their corrections and validation are documented in the [review log](code-review.md). No subsequent automatic-review pass is claimed.
 
 ## Build and test commands
 

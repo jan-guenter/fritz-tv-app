@@ -28,7 +28,7 @@ See [Windows VM setup](docs/development/windows-vm.md) for remote access, deskto
 
 ## GitHub workflow
 
-GitHub Actions builds, tests, analyzes and packages Windows/Linux changes. Protected `main` requires a PR, current passing build/lint/installer checks and resolved review conversations; administrators are included and force pushes are disabled. CodeRabbit is installed for PR review; automatic review starts when a draft PR becomes ready. Renovate configuration is committed; its GitHub App installation is not yet verified and must be enabled for this repository before expecting update PRs. Release tags create draft releases with installers, checksums and dependency notices.
+GitHub Actions builds, tests, analyzes and packages Windows/Linux changes. Protected `main` requires a PR, current passing build/lint/installer checks and resolved review conversations; administrators are included and force pushes are disabled. CodeRabbit is installed and configured for automatic PR review. Its review of the initial PR was [skipped](https://github.com/jan-guenter/fritz-tv-app/pull/1#issuecomment-6647891537) because 232 selected files exceed the account's 150-file limit and review capacity is unavailable. Three completed CLI reviews produced 38 reports; corrections and validation are recorded in the [review log](docs/development/code-review.md). Renovate configuration is committed; its GitHub App installation is not yet verified and must be enabled for this repository before expecting update PRs. Release tags create draft releases with installers, checksums and dependency notices.
 
 ## Licence
 

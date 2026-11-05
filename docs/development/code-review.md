@@ -13,6 +13,12 @@ coderabbit review --agent --fresh --deep --base main --include-untracked \
 
 Initial authentication failed despite a locally authenticated status. The official browser sign-in completed, authentication was verified again, and the subsequent review completed successfully. Review credentials and raw review output remain outside the repository.
 
+## Automatic PR review status
+
+The GitHub App is installed and PR #1 was marked ready, but the [bot status](https://github.com/jan-guenter/fritz-tv-app/pull/1#issuecomment-6647891537) updated at **2026-11-05 09:44:09 UTC** skipped the automatic review of `b12c72f`. It reported **232 selected files against the Essentials limit of 150**, plus **insufficient usage credits or metered capacity**. No automatic code review or new actionable inline findings resulted; account/billing settings were left unchanged.
+
+The three completed CLI reviews below produced **38 reports** in total (18 initial, 12 incremental and eight scoped follow-ups, including the documented duplicates). Their corrections and focused validation are the available review evidence. They do not establish a subsequent zero-issue GitHub App review.
+
 ## Issues and validation
 
 “Implemented” means the correction is present and its stated focused validation passed. “Pending” means implementation or validation has not yet been reported complete. The incremental review results and follow-up corrections are recorded below.
