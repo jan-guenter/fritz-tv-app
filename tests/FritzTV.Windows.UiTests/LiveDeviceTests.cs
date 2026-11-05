@@ -26,7 +26,15 @@ public sealed class LiveDeviceTests
         await NativeDesktopSession.WaitAsync(() => channels.Items.Any(item => string.Equals(item.Name, channelName, StringComparison.Ordinal)), TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ConfigureAwait(true);
         channels.Items.Single(item => string.Equals(item.Name, channelName, StringComparison.Ordinal)).Select();
         session.Find("Play").AsButton().Invoke();
-        await NativeDesktopSession.WaitAsync(() => session.Window.FindFirstDescendant(condition => condition.ByAutomationId("Timeline")) is { } timeline && timeline.AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        try
+        {
+            await NativeDesktopSession.WaitAsync(() => session.Window.FindFirstDescendant(condition => condition.ByAutomationId("Timeline")) is { } timeline && timeline.AsSlider().Value > 3, TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        }
+        catch (TimeoutException)
+        {
+            LiveAutomationDiagnostics.Write(session);
+            throw;
+        }
         session.Find("Pause").AsButton().Invoke();
         await NativeDesktopSession.WaitAsync(() => session.Find("Pause").Name is "Resume" or "Fortsetzen", TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).ConfigureAwait(true);
         double paused = session.Find("Timeline").AsSlider().Value;
