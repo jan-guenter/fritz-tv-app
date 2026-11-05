@@ -48,18 +48,23 @@ public sealed class LiveDeviceTests
         session.Find("Pause").AsButton().Invoke();
         await NativeDesktopSession.WaitAsync(() => session.Find("Timeline").AsSlider().Value > rewound + 0.5, TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ConfigureAwait(true);
         session.Find("GoLive").AsButton().Invoke();
+        await VerifyIndependentRecordingAsync(session, TestContext.Current.CancellationToken).ConfigureAwait(true);
+    }
+
+    private static async Task VerifyIndependentRecordingAsync(NativeDesktopSession session, CancellationToken cancellationToken)
+    {
         session.Find("Details").Patterns.ExpandCollapse.Pattern.Expand();
         session.Find("RecordingsTab").Patterns.SelectionItem.Pattern.Select();
         session.Find("RecordInstant").AsButton().Invoke();
         string directory = Path.Combine(session.DataDirectory, "recordings");
-        await NativeDesktopSession.WaitAsync(() => Directory.Exists(directory) && Directory.EnumerateFiles(directory, "*.ts").Any(), TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        await NativeDesktopSession.WaitAsync(() => Directory.Exists(directory) && Directory.EnumerateFiles(directory, "*.ts").Any(), TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(true);
         string source = Directory.EnumerateFiles(directory, "*.ts").Single();
         session.Find("Stop").AsButton().Invoke();
         long before = new FileInfo(source).Length;
-        await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(true);
         Assert.True(new FileInfo(source).Length > before, "Closing viewing must leave independent recording capture active.");
         session.Find("Recordings").AsListBox().Items[0].Select();
         session.Find("StopRecording").AsButton().Invoke();
-        await NativeDesktopSession.WaitAsync(() => Directory.EnumerateFiles(directory, "*.mkv").Any() || Directory.EnumerateFiles(directory, "*.mka").Any(), TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        await NativeDesktopSession.WaitAsync(() => Directory.EnumerateFiles(directory, "*.mkv").Any() || Directory.EnumerateFiles(directory, "*.mka").Any(), TimeSpan.FromSeconds(45), cancellationToken).ConfigureAwait(true);
     }
 }
