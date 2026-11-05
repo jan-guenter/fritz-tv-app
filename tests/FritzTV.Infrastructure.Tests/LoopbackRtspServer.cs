@@ -17,7 +17,7 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
 
     private readonly ConcurrentBag<TcpClient> connections = [];
 
-    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60, bool malformedKeepalive = false, bool missingSetupSession = false, bool blockPidResponse = false, bool echoSequence = false, bool wrongSequence = false)
+    public LoopbackRtspServer(bool deferFirstSetup = false, int sessionTimeoutSeconds = 60, bool malformedKeepalive = false, bool missingSetupSession = false, bool blockPidResponse = false, bool echoSequence = false, bool wrongSequence = false, string? blockMethod = null)
     {
         DeferFirstSetup = deferFirstSetup;
         SessionTimeoutSeconds = sessionTimeoutSeconds;
@@ -26,6 +26,7 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
         BlockPidResponse = blockPidResponse;
         EchoSequence = echoSequence;
         WrongSequence = wrongSequence;
+        BlockMethod = blockMethod;
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         acceptTask = AcceptAsync(lifetime.Token);
@@ -46,6 +47,8 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
     public bool EchoSequence { get; }
 
     public bool WrongSequence { get; }
+
+    public string? BlockMethod { get; }
 
     public TaskCompletionSource PidRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -139,6 +142,11 @@ internal sealed class LoopbackRtspServer : IAsyncDisposable
                     {
                         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                     }
+                }
+
+                if (BlockMethod is not null && line.StartsWith(BlockMethod + " ", StringComparison.Ordinal))
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (BlockPidResponse && (line.Contains("addpids=", StringComparison.Ordinal) || line.Contains("delpids=", StringComparison.Ordinal)))

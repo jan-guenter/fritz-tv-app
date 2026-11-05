@@ -77,6 +77,7 @@ public sealed class SatIpSession : IAsyncDisposable
         var (newRtp, newRtcp) = BindPair(firstPort, lastPort);
         var tcp = new TcpClient(AddressFamily.InterNetwork) { NoDelay = true };
         RtspConnection? newConnection = null;
+        var phase = "TCP connection";
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -84,6 +85,7 @@ public sealed class SatIpSession : IAsyncDisposable
             await tcp.ConnectAsync(streamUri.Host, streamUri.IsDefaultPort ? 554 : streamUri.Port, timeout.Token).ConfigureAwait(false);
             newConnection = new RtspConnection(tcp);
             var localPort = ((IPEndPoint)newRtp.Client.LocalEndPoint!).Port;
+            phase = "RTSP SETUP";
             var setup = await newConnection.SendAsync("SETUP", streamUri, transport: string.Create(CultureInfo.InvariantCulture, $"RTP/AVP;unicast;client_port={localPort}-{localPort + 1}"), cancellationToken: timeout.Token).ConfigureAwait(false);
             setup.EnsureSuccess();
             if (!setup.Headers.TryGetValue("Session", out var sessionHeader) || !setup.Headers.TryGetValue("com.ses.streamID", out var streamId))
@@ -93,25 +95,17 @@ public sealed class SatIpSession : IAsyncDisposable
 
             var newSessionId = sessionHeader.Split(';')[0];
             var newSessionUri = new UriBuilder(streamUri) { Path = $"/stream={Uri.EscapeDataString(streamId)}", Query = string.Empty }.Uri;
+            phase = "RTSP PLAY";
             var play = await newConnection.SendAsync("PLAY", newSessionUri, newSessionId, cancellationToken: timeout.Token).ConfigureAwait(false);
             play.EnsureSuccess();
-            var keepalive = TimeSpan.FromSeconds(25);
-            foreach (var value in sessionHeader.Split(';', StringSplitOptions.TrimEntries))
-            {
-                if (value.StartsWith("timeout=", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.AsSpan(8), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
-                {
-                    keepalive = TimeSpan.FromSeconds(Math.Clamp(seconds / 2d, 1, 25));
-                }
-            }
-
-            return new SatIpSession(newRtp, newRtcp, newConnection, newSessionUri, newSessionId, keepalive);
+            return new SatIpSession(newRtp, newRtcp, newConnection, newSessionUri, newSessionId, ParseKeepaliveInterval(sessionHeader));
         }
         catch (Exception exception)
         {
             await CleanupFailedOpenAsync(newConnection, tcp, newRtp, newRtcp).ConfigureAwait(false);
             if (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
-                throw new IOException("The SAT>IP connection timed out.", exception);
+                throw new IOException("The SAT>IP " + phase + " timed out.", exception);
             }
 
             if (exception is SocketException)
@@ -121,6 +115,20 @@ public sealed class SatIpSession : IAsyncDisposable
 
             throw;
         }
+    }
+
+    private static TimeSpan ParseKeepaliveInterval(string sessionHeader)
+    {
+        var keepalive = TimeSpan.FromSeconds(25);
+        foreach (var value in sessionHeader.Split(';', StringSplitOptions.TrimEntries))
+        {
+            if (value.StartsWith("timeout=", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.AsSpan(8), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
+            {
+                keepalive = TimeSpan.FromSeconds(Math.Clamp(seconds / 2d, 1, 25));
+            }
+        }
+
+        return keepalive;
     }
 
     private static async Task CleanupFailedOpenAsync(RtspConnection? failedConnection, TcpClient failedClient, UdpClient failedRtp, UdpClient failedRtcp)
